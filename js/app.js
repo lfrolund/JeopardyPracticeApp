@@ -190,13 +190,14 @@ function clueCard({ clue, value, valueLabel, footer }, onResult) {
     const rightBtn = el('button', { class: 'right', onclick: () => finish('right') }, `Right${amount ? ` (+${amount.trim()})` : ''}`);
     const wrongBtn = el('button', { class: 'wrong', onclick: () => finish('wrong') }, `Wrong${amount ? ` (−${amount.trim()})` : ''}`);
     const skipBtn = el('button', { class: 'ghost', onclick: () => finish('skip') }, 'Skip');
-    after.replaceChildren(
+    // replaceChildren would print a null as the text "null", so the optional hint is filtered out.
+    after.replaceChildren(...[
       el('p', { class: 'response' }, clue.response),
       likely == null ? null : el('p', { class: likely ? 'hint good' : 'hint bad' },
         likely ? 'Your response looks right.' : 'Your response doesn’t look like a match.'),
       el('div', { class: 'grade-row' }, rightBtn, wrongBtn, skipBtn),
       el('p', { class: 'muted small' }, 'Keys: R right, W wrong, S skip'),
-    );
+    ].filter(Boolean));
     after.hidden = false;
     (likely === false ? wrongBtn : rightBtn).focus();
   }
