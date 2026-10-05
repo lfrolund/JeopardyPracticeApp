@@ -1,7 +1,7 @@
 name: Update episode index
 
 # Rebuilds data/index.json when the clue dataset gets new commits (for example, new episodes
-# or a new season), and commits it to main, which redeploys the site.
+# or a new season), and commits it to main.
 on:
   schedule:
     - cron: '0 12 * * 1'
@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  pages: write
 
 jobs:
   update:
@@ -34,3 +35,8 @@ jobs:
           git add data/index.json
           git commit -m "Update episode index to dataset ${{ steps.check.outputs.latest }}"
           git push
+      # Pushes made with the workflow token don't start a Pages build on their own.
+      - if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds"

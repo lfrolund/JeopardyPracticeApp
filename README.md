@@ -36,4 +36,4 @@ node scripts/build-index.mjs   # rebuild data/index.json against the dataset's l
 
 ## Deploying
 
-`.github/workflows/pages.yml` runs the tests and publishes the site on every push to `main`. In the repository's **Settings → Pages**, set **Source** to **GitHub Actions** once.
+In the repository's **Settings → Pages**, set **Source** to **Deploy from a branch** and choose `main`, `/ (root)`. There's no build step; `.nojekyll` tells Pages to serve the files as they are. The **Tests** workflow runs `npm test` on pushes and pull requests.
