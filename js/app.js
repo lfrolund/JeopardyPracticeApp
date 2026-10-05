@@ -42,7 +42,7 @@ const DEFAULT_SETTINGS = {
   cluebaseUrl: DEFAULT_CLUEBASE_URL,
   seasons: [],
   unlimited: { mode: 'clues', order: 'random', rounds: [1, 2] },
-  board: { round: 1, players: 1, names: ['Player 1', 'Player 2', 'Player 3'] },
+  board: { round: 1, style: 'episode', players: 1, names: ['Player 1', 'Player 2', 'Player 3'] },
 };
 
 const loaded = store.get('settings', {});
@@ -345,7 +345,7 @@ async function newBoard() {
   $('#b-summary').replaceChildren();
   boardEl.replaceChildren(el('p', { class: 'loading' }, 'Building a board…'));
   try {
-    const cats = await source.board(round, { seasons: settings.seasons });
+    const cats = await source.board(round, { seasons: settings.seasons, style: settings.board.style });
     b = {
       round,
       cats,
@@ -665,6 +665,12 @@ function renderHistory() {
 
 function initBoardControls() {
   $('#b-round').value = String(settings.board.round);
+  const style = $('#b-style');
+  style.value = settings.board.style;
+  style.addEventListener('change', () => {
+    settings.board.style = style.value;
+    saveSettings();
+  });
   const mode = $('#b-mode');
   mode.value = String(settings.board.players);
   $('#b-names').hidden = settings.board.players !== 3;

@@ -130,6 +130,11 @@ test('episode source fetches single episodes by byte range', async () => {
   assert.equal(gh.requests.length, 1);
   assert.match(gh.requests[0].url, /\/x\/y\/abc\/seasons\/season15\.tsv$/);
 
+  const mixed = await src.board(1, { seasons: [41], style: 'mixed' });
+  assert.equal(mixed.length, 6);
+  assert.equal(new Set(mixed.map((c) => c.name)).size, 6);
+  assert.ok(mixed.every((c) => c.clues.map((x) => x.value).join() === '200,400,600,800,1000'));
+
   const clues = await src.randomClues(10, { seasons: [41], rounds: [3] });
   assert.equal(clues.length, 10);
   assert.ok(clues.every((c) => c.round === 3 && c.season === 41));

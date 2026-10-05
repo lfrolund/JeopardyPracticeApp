@@ -151,27 +151,35 @@ export class EpisodeSource {
       .filter((c) => c.clues);
   }
 
-  async board(round, { seasons }) {
+  // style 'episode': a real game's board, all six categories from one episode.
+  // style 'mixed': six categories drawn from ten random episodes, one per episode where possible.
+  async board(round, { seasons, style = 'episode' }) {
     await this.index();
-    // Prefer a real game's board: an episode where all six categories are complete.
-    const full = this.games.filter((g) => (!seasons?.length || seasons.includes(g.season)) && g.complete[round] >= 6);
-    if (full.length) {
-      const cats = this.completeCats(await this.episode(pick(full)), round);
-      if (cats.length >= 6) return cats.sort((a, b) => a.col - b.col).slice(0, 6);
+    if (style === 'episode') {
+      const full = this.games.filter((g) => (!seasons?.length || seasons.includes(g.season)) && g.complete[round] >= 6);
+      if (full.length) {
+        const cats = this.completeCats(await this.episode(pick(full)), round);
+        if (cats.length >= 6) return cats.sort((a, b) => a.col - b.col).slice(0, 6);
+      }
+      // No complete episode in these seasons (common in early seasons): fall back to a mix.
     }
-    // Otherwise mix complete categories from a few episodes.
+    return this.mixedBoard(round, seasons);
+  }
+
+  async mixedBoard(round, seasons, episodes = 10) {
     const { list, weights } = await this.gamesFor(seasons, (g) => g.complete[round]);
     const cats = [];
-    for (let tries = 0; cats.length < 6 && tries < 6; tries++) {
-      const eps = await Promise.all(Array.from({ length: 3 }, () => this.episode(list[weightedIndex(weights)])));
-      for (const ep of eps) {
-        for (const c of shuffle(this.completeCats(ep, round))) {
-          if (cats.length < 6 && !cats.some((x) => x.name === c.name)) cats.push(c);
-        }
-      }
+    const add = (c) => {
+      if (cats.length < 6 && !cats.some((x) => x.name === c.name)) cats.push(c);
+    };
+    for (let tries = 0, batch = episodes; cats.length < 6 && tries < 4; tries++, batch = 5) {
+      const eps = await Promise.all(Array.from({ length: batch }, () => this.episode(list[weightedIndex(weights)])));
+      const perEpisode = eps.map((ep) => shuffle(this.completeCats(ep, round)));
+      for (const options of perEpisode) if (options.length) add(options[0]);
+      for (const c of shuffle(perEpisode.flatMap((o) => o.slice(1)))) add(c);
     }
     if (cats.length < 6) throw new Error('Not enough complete categories for a board with those seasons.');
-    return cats;
+    return shuffle(cats);
   }
 }
 
