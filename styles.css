@@ -293,3 +293,27 @@ th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--bord
   .indent { margin-left: 8px; }
   .season-summary { margin-left: 0; }
 }
+
+.names { display: flex; gap: 6px; flex-wrap: wrap; align-self: end; }
+.names input { width: 9.5em; }
+
+.players-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
+.player {
+  background: var(--board);
+  color: #fff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  text-align: center;
+  border: 3px solid transparent;
+}
+.player.control { border-color: var(--gold); }
+.player .name { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; overflow-wrap: anywhere; }
+.player .pscore { font-size: clamp(1.1rem, 4vw, 1.6rem); font-weight: 800; font-variant-numeric: tabular-nums; }
+.player .pscore.neg { color: #ffb3a8; }
+.player .muted { color: #b9c2ff; font-size: 0.8rem; }
+
+.attempts { list-style: none; padding: 0; margin: 0 0 10px; color: #dfe4ff; }
+.ask { margin: 0 0 8px; font-weight: 600; }
+.cell .who { display: block; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.standings { margin: 8px 0; padding-left: 1.4em; }
+.standings li { margin: 2px 0; }

@@ -10,6 +10,8 @@ A static web app for practicing Jeopardy!, built to run on GitHub Pages with no 
 
 **Practice board.** A full 6 × 5 board for either the Jeopardy! round ($200 to $1,000) or Double Jeopardy! ($400 to $2,000). When possible, the board is a real episode's six categories. Daily Doubles follow the show's odds: one in the first round, two in Double Jeopardy! (never in the same category), with rows and columns weighted by where Daily Doubles actually landed in every episode of the dataset. You wager on them under the real limit: up to your score, or the round's top value if that's higher. Finished boards record your score and your [Coryat score](https://j-archive.com/help.php#coryatscore) so you can track progress.
 
+**Three players.** Set Players to 3 and name everyone. When a clue opens, pick who rang in, then mark them right or wrong. After a miss, the others can try, or choose "No one". Ringing in happens off-screen, between the players. A correct response gives that player control (shown with a gold border). On a Daily Double, you confirm who picked it, and only that player wagers and answers. Each player keeps their own score, and the final standings are saved to history.
+
 For every clue you can type a response (optional), reveal the correct one, and mark yourself right, wrong, or skip. The app suggests whether your typed response matches, but you make the call. Keyboard: Enter reveals, then R, W or S.
 
 **Seasons.** Settings lets you limit clues to any set of seasons. All seasons are used by default. Clue values from before November 26, 2001, when the show doubled its values, are shown at today's values.

@@ -42,7 +42,7 @@ const DEFAULT_SETTINGS = {
   cluebaseUrl: DEFAULT_CLUEBASE_URL,
   seasons: [],
   unlimited: { mode: 'clues', order: 'random', rounds: [1, 2] },
-  board: { round: 1 },
+  board: { round: 1, players: 1, names: ['Player 1', 'Player 2', 'Player 3'] },
 };
 
 const loaded = store.get('settings', {});
@@ -352,6 +352,11 @@ async function newBoard() {
       dds: placeDailyDoubles(round, ddStats()).map(({ row, col }) => `${row},${col}`),
       done: {},
       score: 0, coryat: 0, right: 0, wrong: 0,
+      // Three-player boards keep a score per player; the player in control picks the next clue.
+      players: settings.board.players === 3
+        ? settings.board.names.map((name) => ({ name, score: 0, coryat: 0, right: 0, wrong: 0 }))
+        : null,
+      control: 0,
       seasons: settings.seasons.slice(),
       startedAt: new Date().toISOString(),
       finished: false,
@@ -371,6 +376,18 @@ function boardValue(row) {
 
 function renderBoardScore() {
   const left = b ? 30 - Object.keys(b.done).length : null;
+  const multi = Boolean(b?.players);
+  $('#b-scorebar').hidden = multi;
+  $('#b-players').hidden = !multi;
+  if (multi) {
+    $('#b-players').replaceChildren(
+      el('div', { class: 'players-grid' }, b.players.map((p, i) => el('div', { class: `player${i === b.control && !b.finished ? ' control' : ''}` },
+        el('div', { class: 'name' }, p.name),
+        el('div', { class: `pscore${p.score < 0 ? ' neg' : ''}` }, formatMoney(p.score)),
+        el('div', { class: 'muted' }, `${p.right} right · ${p.wrong} wrong${i === b.control && !b.finished ? ' · picks next' : ''}`)))),
+      el('p', { class: 'muted small' }, `${left} clues left. Gold border marks who picks next.`));
+    return;
+  }
   $('#b-score').textContent = formatMoney(b?.score || 0);
   $('#b-score').classList.toggle('neg', (b?.score || 0) < 0);
   $('#b-coryat').textContent = formatMoney(b?.coryat || 0);
@@ -398,12 +415,19 @@ function renderBoard() {
         disabled: Boolean(result) || b.finished,
         'aria-label': `${cat.name} for ${formatMoney(boardValue(row))}`,
         onclick: () => openCell(row, col),
-      }, result ? (result.result === 'skip' ? '' : (result.result === 'right' ? '✓' : '✗')) : formatMoney(boardValue(row)));
+      }, result ? cellMark(result) : formatMoney(boardValue(row)));
       cells.push(cell);
     });
   }
   boardEl.replaceChildren(...cells);
   if (b.finished) renderSummary();
+}
+
+function cellMark(result) {
+  if (result.result === 'skip') return '';
+  const mark = result.result === 'right' ? '✓' : '✗';
+  if (!b.players || result.by == null) return mark;
+  return [mark, el('span', { class: 'who' }, b.players[result.by].name)];
 }
 
 function openModal(content) {
@@ -418,6 +442,7 @@ function closeModal() {
 }
 
 function openCell(row, col) {
+  if (b.players) return openCellMulti(row, col);
   const key = `${row},${col}`;
   const clue = b.cats[col].clues[row];
   const natural = boardValue(row);
@@ -440,21 +465,36 @@ function openCell(row, col) {
     card.focusInput();
   };
   if (!isDD) return showClue(natural);
+  wagerForm({
+    title: `${b.cats[col].name} · ${formatMoney(natural)} square`,
+    max: maxWager(b.score, b.round),
+    initial: b.score,
+    onWager: (w) => showClue(w, w),
+  });
+}
 
-  const max = maxWager(b.score, b.round);
-  const wager = el('input', { type: 'number', min: 5, max, step: 1, value: Math.min(Math.max(b.score, 5), max), class: 'wager', required: true });
+function recordCell(key, entry) {
+  b.done[key] = entry;
+  if (Object.keys(b.done).length === 30) finishBoard();
+  saveBoard();
+  closeModal();
+  renderBoard();
+}
+
+function wagerForm({ title, max, initial, onWager }) {
+  const wager = el('input', { type: 'number', min: 5, max, step: 1, value: Math.min(Math.max(initial, 5), max), class: 'wager', required: true });
   const form = el('form', {
     class: 'dd',
     onsubmit: (e) => {
       e.preventDefault();
       const w = Math.round(Number(wager.value));
       if (!(w >= 5 && w <= max)) { wager.setCustomValidity(`Wager between $5 and ${formatMoney(max)}`); wager.reportValidity(); return; }
-      showClue(w, w);
+      onWager(w);
     },
   },
   el('h2', { class: 'dd-title' }, 'Daily Double!'),
-  el('p', {}, `${b.cats[col].name} · ${formatMoney(natural)} square`),
-  el('label', {}, `Your wager ($5 to ${formatMoney(max)})`, wager),
+  el('p', {}, title),
+  el('label', {}, `Wager ($5 to ${formatMoney(max)})`, wager),
   el('div', { class: 'row' },
     el('button', { type: 'button', class: 'ghost', onclick: () => { wager.value = max; } }, 'True Daily Double'),
     el('button', { type: 'submit', class: 'primary' }, 'Lock in wager')));
@@ -464,12 +504,114 @@ function openCell(row, col) {
   wager.select();
 }
 
+// Three players: the clue is shown, then you pick who rang in and mark them right or wrong.
+// After a miss the others can try. Buzzing in itself happens off-screen.
+function openCellMulti(row, col) {
+  const key = `${row},${col}`;
+  const clue = b.cats[col].clues[row];
+  const natural = boardValue(row);
+  const isDD = b.dds.includes(key);
+  const players = b.players;
+
+  const play = ({ value, only = null }) => {
+    const attempts = [];
+    let answering = only;
+    let showResponse = false;
+    const body = el('div');
+    const card = el('div', { class: 'clue-card' },
+      el('div', { class: 'clue-meta' },
+        el('span', { class: 'cat' }, clue.category),
+        el('span', { class: 'val' }, isDD ? `${players[only].name} wagered ${formatMoney(value)}` : formatMoney(value)),
+        isDD ? el('span', { class: 'tag' }, 'Daily Double') : null,
+        el('span', { class: 'muted' }, [ROUND_NAMES[clue.round], clue.airDate].filter(Boolean).join(' · '))),
+      clue.comments ? el('p', { class: 'comments' }, clue.comments) : null,
+      el('p', { class: 'clue-text' }, clue.clue),
+      body);
+
+    const finish = (result, by) => recordCell(key, { result, by, value, dd: isDD, attempts });
+
+    const grade = (i, right) => {
+      const p = players[i];
+      attempts.push({ by: i, result: right ? 'right' : 'wrong' });
+      if (right) {
+        p.score += value; p.coryat += natural; p.right++;
+        b.control = i;
+      } else {
+        p.score -= value; if (!isDD) p.coryat -= natural; p.wrong++;
+      }
+      answering = null;
+      const left = players.map((_, j) => j).filter((j) => !attempts.some((a) => a.by === j));
+      if (right) return finish('right', i);
+      if (isDD || !left.length) {
+        showResponse = true;
+        return draw(true);
+      }
+      draw();
+    };
+
+    function draw(closed = false) {
+      const tried = new Set(attempts.map((a) => a.by));
+      const parts = [];
+      if (attempts.length) {
+        parts.push(el('ul', { class: 'attempts' }, attempts.map((a) => el('li', {},
+          `${players[a.by].name}: ${a.result} (${a.result === 'right' ? '+' : '−'}${formatMoney(value)})`))));
+      }
+      if (showResponse) parts.push(el('p', { class: 'response' }, clue.response));
+      if (closed) {
+        parts.push(el('div', { class: 'grade-row' },
+          el('button', { class: 'primary', onclick: () => finish(attempts.length ? 'wrong' : 'skip', null) }, 'Back to board')));
+      } else if (answering == null) {
+        parts.push(el('p', { class: 'ask' }, attempts.length ? 'Anyone else?' : 'Who’s answering?'));
+        parts.push(el('div', { class: 'grade-row' },
+          players.map((p, i) => tried.has(i) ? null : el('button', { class: 'ghost', onclick: () => { answering = i; draw(); } }, p.name)),
+          el('button', { class: 'ghost', onclick: () => { showResponse = true; draw(true); } }, 'No one')));
+      } else {
+        parts.push(el('p', { class: 'ask' }, `${players[answering].name} is answering`));
+        parts.push(el('div', { class: 'grade-row' },
+          el('button', { class: 'right', onclick: () => grade(answering, true) }, `Right (+${formatMoney(value)})`),
+          el('button', { class: 'wrong', onclick: () => grade(answering, false) }, `Wrong (−${formatMoney(value)})`),
+          only == null ? el('button', { class: 'ghost', onclick: () => { answering = null; draw(); } }, 'Someone else') : null));
+      }
+      if (!showResponse && !closed) {
+        parts.push(el('p', {}, el('button', { class: 'link small', onclick: () => { showResponse = true; draw(); } }, 'Show response')));
+      }
+      body.replaceChildren(...parts);
+    }
+
+    draw();
+    openModal(card);
+  };
+
+  if (!isDD) return play({ value: natural });
+
+  // Daily Double: whoever picked the clue answers alone. Default to the player in control.
+  const chooser = el('div', { class: 'dd' },
+    el('h2', { class: 'dd-title' }, 'Daily Double!'),
+    el('p', {}, `${b.cats[col].name} · ${formatMoney(natural)} square`),
+    el('p', { class: 'ask' }, 'Who picked this clue?'),
+    el('div', { class: 'grade-row' }, players.map((p, i) => el('button', {
+      class: i === b.control ? 'primary' : 'ghost',
+      onclick: () => {
+        b.control = i;
+        wagerForm({
+          title: `${p.name} has ${formatMoney(p.score)}`,
+          max: maxWager(p.score, b.round),
+          initial: p.score,
+          onWager: (w) => play({ value: w, only: i }),
+        });
+      },
+    }, p.name))));
+  openModal(chooser);
+  $('button.primary', chooser)?.focus();
+}
+
 function finishBoard() {
   b.finished = true;
   const history = store.get('board-history', []);
   history.unshift({
     at: new Date().toISOString(), round: b.round, score: b.score, coryat: b.coryat,
     right: b.right, wrong: b.wrong, answered: Object.keys(b.done).length, seasons: b.seasons,
+    players: b.players?.map(({ name, score, coryat, right, wrong }) => ({ name, score, coryat, right, wrong })),
   });
   store.set('board-history', history.slice(0, 100));
   saveBoard();
@@ -477,6 +619,16 @@ function finishBoard() {
 }
 
 function renderSummary() {
+  if (b.players) {
+    const ranked = b.players.slice().sort((x, y) => y.score - x.score);
+    $('#b-summary').replaceChildren(el('div', { class: 'summary' },
+      el('h2', {}, ranked[0].score > (ranked[1]?.score ?? -Infinity) ? `${ranked[0].name} leads with ${formatMoney(ranked[0].score)}` : 'It’s a tie at the top'),
+      el('ol', { class: 'standings' }, ranked.map((p) => el('li', {},
+        `${p.name}: ${formatMoney(p.score)} (${p.right} right, ${p.wrong} wrong, Coryat ${formatMoney(p.coryat)})`))),
+      el('p', { class: 'muted' }, `${ROUND_NAMES[b.round]} round.`),
+      el('button', { class: 'primary', onclick: newBoard }, 'Play another board')));
+    return;
+  }
   const answered = b.right + b.wrong;
   const ddResults = Object.values(b.done).filter((d) => d.dd);
   $('#b-summary').replaceChildren(el('div', { class: 'summary' },
@@ -495,7 +647,7 @@ function renderHistory() {
     return;
   }
   const avg = (r) => {
-    const h = history.filter((x) => x.round === r);
+    const h = history.filter((x) => x.round === r && !x.players);
     return h.length ? `${formatMoney(Math.round(h.reduce((s, x) => s + x.coryat, 0) / h.length))} average Coryat over ${h.length}` : null;
   };
   box.replaceChildren(
@@ -505,15 +657,32 @@ function renderHistory() {
       el('tbody', {}, history.map((h) => el('tr', {},
         el('td', {}, new Date(h.at).toLocaleDateString()),
         el('td', {}, h.round === 2 ? 'Double' : 'Jeopardy!'),
-        el('td', {}, formatMoney(h.score)),
-        el('td', {}, formatMoney(h.coryat)),
-        el('td', {}, h.right),
-        el('td', {}, h.wrong))))),
+        h.players
+          ? el('td', { colspan: 4 }, h.players.map((p) => `${p.name} ${formatMoney(p.score)}`).join(' · '))
+          : [el('td', {}, formatMoney(h.score)), el('td', {}, formatMoney(h.coryat)), el('td', {}, h.right), el('td', {}, h.wrong)])))),
     el('button', { class: 'ghost small', onclick: () => { store.del('board-history'); renderHistory(); } }, 'Clear history'));
 }
 
 function initBoardControls() {
   $('#b-round').value = String(settings.board.round);
+  const mode = $('#b-mode');
+  mode.value = String(settings.board.players);
+  $('#b-names').hidden = settings.board.players !== 3;
+  mode.addEventListener('change', () => {
+    settings.board.players = Number(mode.value);
+    $('#b-names').hidden = settings.board.players !== 3;
+    saveSettings();
+  });
+  $$('.b-name').forEach((input, i) => {
+    input.value = settings.board.names[i];
+    input.addEventListener('input', () => {
+      const name = input.value.trim() || `Player ${i + 1}`;
+      settings.board.names[i] = name;
+      saveSettings();
+      // Renaming applies to the board in progress too.
+      if (b?.players) { b.players[i].name = name; saveBoard(); renderBoard(); }
+    });
+  });
   $('#b-new').addEventListener('click', newBoard);
   $('#b-end').addEventListener('click', () => {
     if (!b || b.finished) return;

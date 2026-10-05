@@ -64,12 +64,24 @@
             <option value="2">Double Jeopardy! ($400 to $2,000)</option>
           </select>
         </label>
+        <label>Players
+          <select id="b-mode">
+            <option value="1">1 (practice)</option>
+            <option value="3">3 players</option>
+          </select>
+        </label>
+        <span id="b-names" class="names">
+          <input type="text" class="b-name" aria-label="Player 1 name" maxlength="20">
+          <input type="text" class="b-name" aria-label="Player 2 name" maxlength="20">
+          <input type="text" class="b-name" aria-label="Player 3 name" maxlength="20">
+        </span>
         <button id="b-new" class="primary">New board</button>
         <button id="b-end" class="ghost">End board</button>
         <span class="season-summary"></span>
       </div>
 
-      <div class="scorebar">
+      <div id="b-players" class="players" hidden></div>
+      <div id="b-scorebar" class="scorebar">
         <div><span class="label">Score</span><strong id="b-score">$0</strong></div>
         <div><span class="label">Coryat</span><strong id="b-coryat">$0</strong></div>
         <div><span class="label">Right</span><strong id="b-right">0</strong></div>
