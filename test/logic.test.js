@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DEFAULT_DD_STATS, maxWager, placeDailyDoubles } from '../js/dd.js';
 import { isLikelyCorrect, normalizeAnswer } from '../js/grade.js';
-import { completeCategory, LocalSource } from '../js/sources.js';
-import { DatasetBuilder, F } from '../js/tsv.js';
+import { completeCategory, EpisodeSource } from '../js/sources.js';
+import { headerIndex, rowToClue } from '../js/tsv.js';
 import { modernValue, normalizeRound, rowForValue, seasonFromDate } from '../js/util.js';
 
 function seeded(seed) {
@@ -77,39 +77,69 @@ function fakeGame(date, { oldValues = false, ddAt = [3, 1] } = {}) {
   return lines;
 }
 
-test('dataset import groups by season, assigns columns and measures Daily Doubles', async () => {
-  const b = new DatasetBuilder();
-  b.startFile();
-  b.addLine(HEADER);
-  for (let d = 0; d < 60; d++) for (const l of fakeGame(new Date(Date.UTC(2024, 9, 1 + d)).toISOString().slice(0, 10))) b.addLine(l);
-  for (const l of fakeGame('1999-02-01', { oldValues: true })) b.addLine(l);
-  // Re-adding the same file is de-duplicated.
-  b.startFile();
-  b.addLine(HEADER);
-  for (const l of fakeGame('1999-02-01', { oldValues: true })) b.addLine(l);
-  const res = b.finish();
-  assert.deepEqual(res.seasons, [15, 41]);
-  const s15 = res.bySeason.get(15);
-  assert.equal(s15.length, 61);
-  assert.equal(Math.max(...s15.filter((c) => c[F.round] === 1).map((c) => c[F.value])), 1000);
-  assert.equal(Math.max(...s15.map((c) => c[F.col])), 5);
-  assert.deepEqual(res.ddStats[1].rows.slice(0, 3), [0, 0, 0]);
-  assert.ok(res.ddStats[1].rows[3] > 0);
-  assert.equal(res.ddStats[1].cols[1], res.ddStats[1].rows[3]);
+test('season file rows parse with the dataset columns', () => {
+  const h = headerIndex(HEADER);
+  const [dd] = fakeGame('1999-02-01', { oldValues: true }).filter((l) => l.split('\t')[2] !== '0');
+  const c = rowToClue(dd, h);
+  assert.equal(c[0], 1);
+  assert.equal(c[1], 800); // $400 in 1999 shown at today's value
+  assert.equal(c[2], 3000);
+  assert.equal(c[5], 'Resp 3');
+  assert.throws(() => headerIndex('a\tb\tc'), /missing column/);
+});
 
-  const src = new LocalSource(
-    { seasons: res.seasons.map((s) => ({ season: s, count: res.bySeason.get(s).length })), ddStats: res.ddStats },
-    async (s) => res.bySeason.get(s),
-  );
+// A fake GitHub: season files plus an index of byte ranges, like scripts/build-index.mjs makes.
+function fakeGitHub(seasonGames) {
+  const files = {};
+  const seasons = [];
+  for (const [season, dates] of Object.entries(seasonGames)) {
+    let text = `${HEADER}\n`;
+    const games = [];
+    for (const date of dates) {
+      const block = `${fakeGame(date, { oldValues: date < '2001-11-26' }).join('\n')}\n`;
+      const start = Buffer.byteLength(text);
+      games.push([date, start, Buffer.byteLength(block), 30, 30, 1, 6, 6]);
+      text += block;
+    }
+    files[season] = Buffer.from(text);
+    seasons.push({ season: Number(season), games });
+  }
+  const index = { repo: 'x/y', ref: 'abc', header: HEADER, seasons, ddStats: DEFAULT_DD_STATS };
+  const requests = [];
+  const fetchFn = async (url, opts = {}) => {
+    if (url === 'data/index.json') return { ok: true, status: 200, json: async () => index };
+    requests.push({ url, range: opts.headers?.Range });
+    const season = /season(\d+)\.tsv$/.exec(url)[1];
+    const [, a, b] = /bytes=(\d+)-(\d+)/.exec(opts.headers.Range);
+    const body = files[season].subarray(Number(a), Number(b) + 1);
+    return { ok: true, status: 206, arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.length) };
+  };
+  return { fetchFn, requests };
+}
+
+test('episode source fetches single episodes by byte range', async () => {
+  const gh = fakeGitHub({ 15: ['1999-02-01', '1999-02-02'], 41: ['2024-10-01', '2024-10-02', '2024-10-03'] });
+  const src = new EpisodeSource({ fetchFn: gh.fetchFn });
+  assert.deepEqual((await src.seasons()).map((s) => s.id), [15, 41]);
+
   const board = await src.board(2, { seasons: [15] });
   assert.equal(board.length, 6);
   assert.deepEqual(board[0].clues.map((c) => c.value), [400, 800, 1200, 1600, 2000]);
   assert.deepEqual(board.map((c) => c.name), [0, 1, 2, 3, 4, 5].map((i) => `CAT 2-${i}`));
-  const clues = await src.randomClues(10, { seasons: [], rounds: [3] });
-  assert.ok(clues.every((c) => c.round === 3));
-  const cat = await src.randomCategory({ seasons: [41], rounds: [1] });
+  assert.equal(new Set(board.map((c) => c.airDate)).size, 1);
+  assert.equal(gh.requests.length, 1);
+  assert.match(gh.requests[0].url, /\/x\/y\/abc\/seasons\/season15\.tsv$/);
+
+  const clues = await src.randomClues(10, { seasons: [41], rounds: [3] });
+  assert.equal(clues.length, 10);
+  assert.ok(clues.every((c) => c.round === 3 && c.season === 41));
+  // Each episode is fetched at most once.
+  assert.ok(gh.requests.length <= 4);
+
+  const cat = await src.randomCategory({ seasons: [], rounds: [1] });
   assert.equal(cat.length, 5);
   assert.equal(new Set(cat.map((c) => c.category)).size, 1);
+  assert.deepEqual(cat.map((c) => c.value), [200, 400, 600, 800, 1000]);
 });
 
 test('completeCategory fills a Daily Double stored at its wager', () => {

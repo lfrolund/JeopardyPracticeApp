@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Commits pushed by the index workflow don't trigger push events, so redeploy after it runs.
+  workflow_run:
+    workflows: [Update episode index]
+    types: [completed]
 
 permissions:
   contents: read
@@ -27,7 +31,7 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p _site
-          cp -r index.html styles.css js _site/
+          cp -r index.html styles.css js data _site/
           touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name != 'pull_request'

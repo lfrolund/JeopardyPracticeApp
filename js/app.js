@@ -1,8 +1,6 @@
 import { DEFAULT_DD_STATS, maxWager, placeDailyDoubles, rowPercentages } from './dd.js';
 import { isLikelyCorrect } from './grade.js';
-import { clearDataset, loadMeta, loadSeason, saveDataset } from './localdb.js';
-import { CluebaseSource, DEFAULT_CLUEBASE_URL, LocalSource } from './sources.js';
-import { DatasetBuilder } from './tsv.js';
+import { CluebaseSource, DEFAULT_CLUEBASE_URL, EpisodeSource } from './sources.js';
 import { ROUND_NAMES, formatMoney, shuffle } from './util.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -58,14 +56,17 @@ const saveSettings = () => store.set('settings', settings);
 
 // ------------------------------------------------------------------ source
 
-let localMeta = null;
 let source = null;
 let seasonList = [];
 
+function safeLocalStorage() {
+  try { return window.localStorage; } catch { return null; }
+}
+
 function buildSource() {
-  source = settings.source === 'local' && localMeta
-    ? new LocalSource(localMeta, loadSeason)
-    : new CluebaseSource(settings.cluebaseUrl, localStorage);
+  source = settings.source === 'cluebase'
+    ? new CluebaseSource(settings.cluebaseUrl, safeLocalStorage())
+    : new EpisodeSource();
   seasonList = [];
   return source;
 }
@@ -243,7 +244,7 @@ async function refill() {
     const ordered = settings.unlimited.order === 'random' ? shuffle(cat) : cat;
     return ordered.map((c, i) => ({ clue: c, pos: `Clue ${i + 1} of ${ordered.length} in this category` }));
   }
-  return (await source.randomClues(20, opts)).map((c) => ({ clue: c }));
+  return (await source.randomClues(10, opts)).map((c) => ({ clue: c }));
 }
 
 // Starts fetching the next batch unless one is already on its way. The batch lands in the
@@ -529,9 +530,7 @@ function initBoardControls() {
 
 function renderDDOdds() {
   const stats = ddStats();
-  $('#s-dd-source').textContent = source?.ddStats
-    ? 'Measured from the Daily Doubles in your imported dataset.'
-    : 'Measured from every Daily Double in seasons 1–42 (9,345 games). Importing a dataset replaces these with counts from its games.';
+  $('#s-dd-source').textContent = 'Measured from where Daily Doubles actually landed in every episode of the clue dataset.';
   const table = (round) => {
     const pct = rowPercentages(stats, round);
     return el('table', { class: 'dd-table' },
@@ -543,63 +542,6 @@ function renderDDOdds() {
   $('#s-dd').replaceChildren(table(1), table(2));
 }
 
-function renderImportStatus() {
-  const status = $('#s-import-status');
-  $('#s-clear').hidden = !localMeta;
-  if (!localMeta) {
-    status.textContent = 'No dataset imported yet.';
-    return;
-  }
-  const total = localMeta.seasons.reduce((s, x) => s + x.count, 0);
-  const first = localMeta.seasons[0]?.season;
-  const last = localMeta.seasons.at(-1)?.season;
-  status.textContent = `${total.toLocaleString()} clues from seasons ${first}–${last}, imported ${new Date(localMeta.importedAt).toLocaleString()}.`;
-}
-
-async function importFiles(files) {
-  const progress = $('#s-progress');
-  const status = $('#s-import-status');
-  const builder = new DatasetBuilder();
-  const totalBytes = files.reduce((s, f) => s + f.size, 0);
-  let readBytes = 0;
-  progress.hidden = false;
-  progress.max = totalBytes;
-  progress.value = 0;
-  try {
-    for (const file of files) {
-      status.textContent = `Reading ${file.name}…`;
-      builder.startFile();
-      const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
-      let rest = '';
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        readBytes += value.length;
-        progress.value = Math.min(readBytes, totalBytes);
-        const lines = (rest + value).split(/\r?\n/);
-        rest = lines.pop();
-        for (const line of lines) builder.addLine(line);
-      }
-      if (rest) builder.addLine(rest);
-    }
-    status.textContent = 'Saving…';
-    const result = builder.finish();
-    if (!result.rows) throw new Error('No clues found in those files.');
-    localMeta = await saveDataset({ bySeason: result.bySeason, ddStats: result.ddStats, files: files.map((f) => f.name) });
-    settings.source = 'local';
-    settings.seasons = [];
-    saveSettings();
-    $('input[name=source][value=local]').checked = true;
-    await switchSource();
-  } catch (err) {
-    status.textContent = `Import failed: ${friendlyError(err)}`;
-    return;
-  } finally {
-    progress.hidden = true;
-  }
-  renderImportStatus();
-}
-
 async function switchSource() {
   buildSource();
   renderDDOdds();
@@ -608,6 +550,7 @@ async function switchSource() {
   $('#s-seasons').replaceChildren(el('p', { class: 'muted' }, 'Loading seasons…'));
   resetUnlimitedQueue();
   await loadSeasonList();
+  renderDDOdds();
 }
 
 function initSettings() {
@@ -616,11 +559,6 @@ function initSettings() {
   for (const radio of $$('input[name=source]')) {
     radio.checked = radio.value === settings.source;
     radio.addEventListener('change', () => {
-      if (radio.value === 'local' && !localMeta) {
-        $('#s-import-status').textContent = 'Import a dataset first.';
-        $('input[name=source][value=cluebase]').checked = true;
-        return;
-      }
       settings.source = radio.value;
       settings.seasons = [];
       saveSettings();
@@ -642,22 +580,6 @@ function initSettings() {
     } catch (err) {
       out.textContent = friendlyError(err);
     }
-  });
-  $('#s-file').addEventListener('change', (e) => {
-    // Copy the list first: clearing the input below empties the live FileList.
-    if (e.target.files.length) importFiles([...e.target.files]);
-    e.target.value = '';
-  });
-  $('#s-clear').addEventListener('click', async () => {
-    if (!confirm('Remove the imported clues from this browser?')) return;
-    await clearDataset();
-    localMeta = null;
-    settings.source = 'cluebase';
-    settings.seasons = [];
-    saveSettings();
-    $('input[name=source][value=cluebase]').checked = true;
-    renderImportStatus();
-    switchSource();
   });
   $('#s-all').addEventListener('click', () => setSeasons(seasonList.map((s) => s.id)));
   $('#s-none').addEventListener('click', () => {
@@ -682,21 +604,20 @@ function showView(name) {
 }
 
 async function init() {
-  localMeta = await loadMeta();
-  if (!settings.source) settings.source = localMeta ? 'local' : 'cluebase';
-  if (settings.source === 'local' && !localMeta) settings.source = 'cluebase';
+  // 'local' was the earlier file-import source; the GitHub dataset replaces it.
+  if (settings.source !== 'cluebase') settings.source = 'dataset';
   buildSource();
   initUnlimitedControls();
   initBoardControls();
   initSettings();
-  renderImportStatus();
   renderDDOdds();
   renderUnlimitedScore();
   renderHistory();
   refreshSeasonSummaries();
   for (const t of $$('.tab')) t.addEventListener('click', () => showView(t.dataset.view));
   showView(settings.view);
-  loadSeasonList();
+  await loadSeasonList();
+  renderDDOdds();
 }
 
 init();
