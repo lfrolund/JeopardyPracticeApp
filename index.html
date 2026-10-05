@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jeopardy! Practice</title>
+  <meta name="description" content="Practice Jeopardy! with unlimited clues or a full scored board.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Jeopardy! Practice</h1>
+    <nav class="tabs" role="tablist">
+      <button class="tab" data-view="unlimited" role="tab">Unlimited</button>
+      <button class="tab" data-view="board" role="tab">Practice board</button>
+      <button class="tab" data-view="settings" role="tab">Settings</button>
+    </nav>
+  </header>
+
+  <div id="source-banner" class="banner" hidden></div>
+
+  <main>
+    <!-- Unlimited ------------------------------------------------------ -->
+    <section id="view-unlimited" class="view" hidden>
+      <div class="toolbar">
+        <label>Mode
+          <select id="u-mode">
+            <option value="clues">Truly random clues</option>
+            <option value="categories">Random categories</option>
+          </select>
+        </label>
+        <label id="u-order-wrap">Order within category
+          <select id="u-order">
+            <option value="random">Random</option>
+            <option value="value">Lowest value first</option>
+          </select>
+        </label>
+        <fieldset class="inline">
+          <legend>Rounds</legend>
+          <label><input type="checkbox" class="u-round" value="1"> Jeopardy!</label>
+          <label><input type="checkbox" class="u-round" value="2"> Double</label>
+          <label><input type="checkbox" class="u-round" value="3"> Final</label>
+        </fieldset>
+        <span class="season-summary"></span>
+      </div>
+
+      <div class="scorebar">
+        <div><span class="label">Score</span><strong id="u-score">$0</strong></div>
+        <div><span class="label">Right</span><strong id="u-right">0</strong></div>
+        <div><span class="label">Wrong</span><strong id="u-wrong">0</strong></div>
+        <div><span class="label">Accuracy</span><strong id="u-acc">–</strong></div>
+        <button id="u-reset" class="ghost">Reset score</button>
+      </div>
+
+      <div id="u-stage" class="stage"></div>
+    </section>
+
+    <!-- Practice board -------------------------------------------------- -->
+    <section id="view-board" class="view" hidden>
+      <div class="toolbar">
+        <label>Round
+          <select id="b-round">
+            <option value="1">Jeopardy! ($200 to $1,000)</option>
+            <option value="2">Double Jeopardy! ($400 to $2,000)</option>
+          </select>
+        </label>
+        <button id="b-new" class="primary">New board</button>
+        <button id="b-end" class="ghost">End board</button>
+        <span class="season-summary"></span>
+      </div>
+
+      <div class="scorebar">
+        <div><span class="label">Score</span><strong id="b-score">$0</strong></div>
+        <div><span class="label">Coryat</span><strong id="b-coryat">$0</strong></div>
+        <div><span class="label">Right</span><strong id="b-right">0</strong></div>
+        <div><span class="label">Wrong</span><strong id="b-wrong">0</strong></div>
+        <div><span class="label">Clues left</span><strong id="b-left">–</strong></div>
+      </div>
+
+      <div id="b-board" class="board"></div>
+      <div id="b-summary"></div>
+
+      <details class="history">
+        <summary>Past boards</summary>
+        <div id="b-history"></div>
+      </details>
+    </section>
+
+    <!-- Settings -------------------------------------------------------- -->
+    <section id="view-settings" class="view" hidden>
+      <div class="panel">
+        <h2>Clue source</h2>
+        <label class="radio"><input type="radio" name="source" value="cluebase"> Cluebase API</label>
+        <div class="indent">
+          <label>API URL <input id="s-url" type="url" placeholder="https://cluebase.lukelav.in" spellcheck="false"></label>
+          <button id="s-test" class="ghost">Test connection</button>
+          <p id="s-test-result" class="muted"></p>
+          <p class="muted">The public instance at cluebase.lukelav.in stopped resolving in 2026. If you run your own copy of
+            <a href="https://github.com/lukelavin/cluebase" target="_blank" rel="noopener">Cluebase</a>, enter its URL here. It must allow cross-origin requests.</p>
+        </div>
+
+        <label class="radio"><input type="radio" name="source" value="local"> Imported dataset (stays in this browser)</label>
+        <div class="indent">
+          <p class="muted">Download the TSV files from the
+            <a href="https://github.com/jwolle1/jeopardy_clue_dataset/releases" target="_blank" rel="noopener">Jeopardy! clue dataset</a>
+            (the combined file or individual seasons), then load them here. You can pick several files at once.
+            Nothing is uploaded anywhere.</p>
+          <input id="s-file" type="file" accept=".tsv,.txt,text/tab-separated-values" multiple>
+          <progress id="s-progress" hidden></progress>
+          <p id="s-import-status" class="muted"></p>
+          <button id="s-clear" class="ghost danger" hidden>Remove imported data</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Seasons</h2>
+        <p class="muted">Leave all selected to draw from every season.</p>
+        <div class="row">
+          <button id="s-all" class="ghost">Select all</button>
+          <button id="s-none" class="ghost">Clear</button>
+          <button id="s-modern" class="ghost">Season 18 onward</button>
+        </div>
+        <div id="s-seasons" class="season-grid"><p class="muted">Loading seasons…</p></div>
+      </div>
+
+      <div class="panel">
+        <h2>Daily Double odds</h2>
+        <p class="muted" id="s-dd-source"></p>
+        <div id="s-dd"></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

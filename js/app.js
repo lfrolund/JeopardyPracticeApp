@@ -1,0 +1,702 @@
+import { DEFAULT_DD_STATS, maxWager, placeDailyDoubles, rowPercentages } from './dd.js';
+import { isLikelyCorrect } from './grade.js';
+import { clearDataset, loadMeta, loadSeason, saveDataset } from './localdb.js';
+import { CluebaseSource, DEFAULT_CLUEBASE_URL, LocalSource } from './sources.js';
+import { DatasetBuilder } from './tsv.js';
+import { ROUND_NAMES, formatMoney, shuffle } from './util.js';
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') node.className = v;
+    else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) node.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of children.flat()) if (c != null && c !== false) node.append(c);
+  return node;
+}
+
+// ------------------------------------------------------------------ storage
+
+const store = {
+  get(key, fallback) {
+    try {
+      const v = localStorage.getItem(key);
+      return v == null ? fallback : JSON.parse(v);
+    } catch {
+      return fallback;
+    }
+  },
+  set(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* private mode or quota */ }
+  },
+  del(key) {
+    try { localStorage.removeItem(key); } catch { /* ignore */ }
+  },
+};
+
+const DEFAULT_SETTINGS = {
+  view: 'unlimited',
+  source: null,
+  cluebaseUrl: DEFAULT_CLUEBASE_URL,
+  seasons: [],
+  unlimited: { mode: 'clues', order: 'random', rounds: [1, 2] },
+  board: { round: 1 },
+};
+
+const loaded = store.get('settings', {});
+const settings = {
+  ...DEFAULT_SETTINGS,
+  ...loaded,
+  unlimited: { ...DEFAULT_SETTINGS.unlimited, ...loaded.unlimited },
+  board: { ...DEFAULT_SETTINGS.board, ...loaded.board },
+};
+const saveSettings = () => store.set('settings', settings);
+
+// ------------------------------------------------------------------ source
+
+let localMeta = null;
+let source = null;
+let seasonList = [];
+
+function buildSource() {
+  source = settings.source === 'local' && localMeta
+    ? new LocalSource(localMeta, loadSeason)
+    : new CluebaseSource(settings.cluebaseUrl, localStorage);
+  seasonList = [];
+  return source;
+}
+
+const ddStats = () => source?.ddStats || DEFAULT_DD_STATS;
+
+function showBanner(message) {
+  const b = $('#source-banner');
+  b.hidden = !message;
+  b.replaceChildren();
+  if (message) {
+    b.append(message, ' ', el('button', { class: 'link', onclick: () => showView('settings') }, 'Open settings'));
+  }
+}
+
+function friendlyError(err) {
+  return err?.message || String(err);
+}
+
+// ------------------------------------------------------------------ seasons
+
+function seasonSummary() {
+  const sel = settings.seasons;
+  if (!sel.length) return 'All seasons';
+  const s = [...sel].sort((a, b) => a - b);
+  const parts = [];
+  for (let i = 0; i < s.length; i++) {
+    let j = i;
+    while (j + 1 < s.length && s[j + 1] === s[j] + 1) j++;
+    parts.push(i === j ? `${s[i]}` : `${s[i]}–${s[j]}`);
+    i = j;
+  }
+  return `${s.length === 1 ? 'Season' : 'Seasons'} ${parts.join(', ')}`;
+}
+
+function refreshSeasonSummaries() {
+  for (const n of $$('.season-summary')) n.textContent = seasonSummary();
+}
+
+function setSeasons(ids) {
+  const all = seasonList.map((s) => s.id);
+  const unique = [...new Set(ids)].filter((id) => all.includes(id));
+  settings.seasons = unique.length === all.length ? [] : unique;
+  saveSettings();
+  renderSeasonGrid();
+  refreshSeasonSummaries();
+  resetUnlimitedQueue();
+}
+
+async function loadSeasonList() {
+  const grid = $('#s-seasons');
+  const from = source;
+  try {
+    const list = await from.seasons();
+    if (from !== source) return;
+    seasonList = list;
+    renderSeasonGrid();
+  } catch (err) {
+    if (from !== source) return;
+    grid.replaceChildren(el('p', { class: 'muted' }, `Couldn't load seasons: ${friendlyError(err)}`));
+  }
+}
+
+function renderSeasonGrid() {
+  const grid = $('#s-seasons');
+  if (!seasonList.length) return;
+  const selected = settings.seasons.length ? new Set(settings.seasons) : new Set(seasonList.map((s) => s.id));
+  grid.replaceChildren(...seasonList.map((s) => {
+    const box = el('input', { type: 'checkbox', value: s.id, checked: selected.has(s.id) });
+    box.addEventListener('change', () => {
+      const ids = $$('input', grid).filter((i) => i.checked).map((i) => Number(i.value));
+      if (!ids.length) {
+        box.checked = true;
+        return;
+      }
+      setSeasons(ids);
+    });
+    return el('label', { class: 'season', title: s.count ? `${s.count.toLocaleString()} clues` : '' }, box, ` ${s.id}`);
+  }));
+}
+
+// ------------------------------------------------------------------ clue card
+
+// Renders a clue with an optional typed response, reveal, and self-grading.
+// onResult receives 'right', 'wrong', or 'skip'.
+function clueCard({ clue, value, valueLabel, footer }, onResult) {
+  let revealed = false;
+  const input = el('input', { type: 'text', class: 'answer', placeholder: 'Your response (optional)', autocomplete: 'off', spellcheck: 'false' });
+  const revealBtn = el('button', { class: 'primary', onclick: reveal }, 'Reveal');
+  const after = el('div', { class: 'after', hidden: true });
+
+  const meta = el('div', { class: 'clue-meta' },
+    el('span', { class: 'cat' }, clue.category),
+    el('span', { class: 'val' }, valueLabel ?? (value ? formatMoney(value) : ROUND_NAMES[clue.round])),
+    clue.dd ? el('span', { class: 'tag' }, 'Daily Double') : null,
+    el('span', { class: 'muted' }, [ROUND_NAMES[clue.round], clue.airDate].filter(Boolean).join(' · ')),
+  );
+
+  const card = el('div', { class: 'clue-card' },
+    meta,
+    clue.comments ? el('p', { class: 'comments' }, clue.comments) : null,
+    el('p', { class: 'clue-text' }, clue.clue),
+    el('form', { class: 'answer-row', onsubmit: (e) => { e.preventDefault(); reveal(); } }, input, revealBtn),
+    after,
+    footer || null,
+  );
+
+  function finish(result) {
+    document.removeEventListener('keydown', onKey);
+    onResult(result);
+  }
+
+  function reveal() {
+    if (revealed) return;
+    revealed = true;
+    input.disabled = true;
+    revealBtn.hidden = true;
+    const guess = input.value.trim();
+    const likely = guess ? isLikelyCorrect(guess, clue.response) : null;
+    const amount = value ? ` ${formatMoney(value)}` : '';
+    const rightBtn = el('button', { class: 'right', onclick: () => finish('right') }, `Right${amount ? ` (+${amount.trim()})` : ''}`);
+    const wrongBtn = el('button', { class: 'wrong', onclick: () => finish('wrong') }, `Wrong${amount ? ` (−${amount.trim()})` : ''}`);
+    const skipBtn = el('button', { class: 'ghost', onclick: () => finish('skip') }, 'Skip');
+    after.replaceChildren(
+      el('p', { class: 'response' }, clue.response),
+      likely == null ? null : el('p', { class: likely ? 'hint good' : 'hint bad' },
+        likely ? 'Your response looks right.' : 'Your response doesn’t look like a match.'),
+      el('div', { class: 'grade-row' }, rightBtn, wrongBtn, skipBtn),
+      el('p', { class: 'muted small' }, 'Keys: R right, W wrong, S skip'),
+    );
+    after.hidden = false;
+    (likely === false ? wrongBtn : rightBtn).focus();
+  }
+
+  function onKey(e) {
+    if (!card.isConnected) return document.removeEventListener('keydown', onKey);
+    if (!revealed || e.target === input || e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === 'r') finish('right');
+    else if (k === 'w') finish('wrong');
+    else if (k === 's') finish('skip');
+  }
+  document.addEventListener('keydown', onKey);
+
+  card.focusInput = () => input.focus();
+  return card;
+}
+
+// ------------------------------------------------------------------ unlimited
+
+const u = { ...store.get('unlimited-score', { score: 0, right: 0, wrong: 0 }), queue: [], loading: null, gen: 0 };
+
+function renderUnlimitedScore() {
+  $('#u-score').textContent = formatMoney(u.score);
+  $('#u-score').classList.toggle('neg', u.score < 0);
+  $('#u-right').textContent = u.right;
+  $('#u-wrong').textContent = u.wrong;
+  const n = u.right + u.wrong;
+  $('#u-acc').textContent = n ? `${Math.round((u.right / n) * 100)}%` : '–';
+  store.set('unlimited-score', { score: u.score, right: u.right, wrong: u.wrong });
+}
+
+function resetUnlimitedQueue() {
+  u.queue = [];
+  u.gen++;
+  u.loading = null;
+  if (currentView === 'unlimited') nextUnlimited();
+  else $('#u-stage').replaceChildren();
+}
+
+async function refill() {
+  const opts = { seasons: settings.seasons, rounds: settings.unlimited.rounds };
+  if (settings.unlimited.mode === 'categories') {
+    const cat = await source.randomCategory(opts);
+    const ordered = settings.unlimited.order === 'random' ? shuffle(cat) : cat;
+    return ordered.map((c, i) => ({ clue: c, pos: `Clue ${i + 1} of ${ordered.length} in this category` }));
+  }
+  return (await source.randomClues(20, opts)).map((c) => ({ clue: c }));
+}
+
+// Starts fetching the next batch unless one is already on its way. The batch lands in the
+// queue only if the settings haven't changed since it was requested.
+function ensureLoading() {
+  if (!u.loading) {
+    const gen = u.gen;
+    u.loading = refill().then((items) => {
+      if (gen === u.gen) { u.queue.push(...items); u.loading = null; }
+    }, (err) => {
+      if (gen === u.gen) u.loading = null;
+      throw err;
+    });
+  }
+  return u.loading;
+}
+
+async function nextUnlimited() {
+  const stage = $('#u-stage');
+  const gen = u.gen;
+  if (!u.queue.length) {
+    stage.replaceChildren(el('p', { class: 'loading' }, 'Finding clues…'));
+    try {
+      await ensureLoading();
+      if (gen !== u.gen) return;
+      showBanner('');
+    } catch (err) {
+      if (gen !== u.gen) return;
+      stage.replaceChildren(el('div', { class: 'error' },
+        el('p', {}, friendlyError(err)),
+        el('button', { class: 'ghost', onclick: nextUnlimited }, 'Try again')));
+      showBanner(friendlyError(err));
+      return;
+    }
+    if (!u.queue.length) return nextUnlimited();
+  }
+  const item = u.queue.shift();
+  const card = clueCard({
+    clue: item.clue,
+    value: item.clue.value,
+    footer: item.pos ? el('p', { class: 'muted small' }, item.pos) : null,
+  }, (result) => {
+    const v = item.clue.value || 0;
+    if (result === 'right') { u.score += v; u.right++; }
+    if (result === 'wrong') { u.score -= v; u.wrong++; }
+    renderUnlimitedScore();
+    nextUnlimited();
+  });
+  stage.replaceChildren(card);
+  card.focusInput();
+  // Fetch the next batch in the background while this clue is up.
+  if (u.queue.length < 2) ensureLoading().catch(() => {});
+}
+
+function initUnlimitedControls() {
+  const mode = $('#u-mode');
+  const order = $('#u-order');
+  mode.value = settings.unlimited.mode;
+  order.value = settings.unlimited.order;
+  $('#u-order-wrap').hidden = mode.value !== 'categories';
+  mode.addEventListener('change', () => {
+    settings.unlimited.mode = mode.value;
+    $('#u-order-wrap').hidden = mode.value !== 'categories';
+    saveSettings();
+    resetUnlimitedQueue();
+  });
+  order.addEventListener('change', () => {
+    settings.unlimited.order = order.value;
+    saveSettings();
+    resetUnlimitedQueue();
+  });
+  for (const box of $$('.u-round')) {
+    box.checked = settings.unlimited.rounds.includes(Number(box.value));
+    box.addEventListener('change', () => {
+      const rounds = $$('.u-round').filter((b) => b.checked).map((b) => Number(b.value));
+      if (!rounds.length) { box.checked = true; return; }
+      settings.unlimited.rounds = rounds;
+      saveSettings();
+      resetUnlimitedQueue();
+    });
+  }
+  $('#u-reset').addEventListener('click', () => {
+    Object.assign(u, { score: 0, right: 0, wrong: 0 });
+    renderUnlimitedScore();
+  });
+}
+
+// ------------------------------------------------------------------ practice board
+
+let b = store.get('board-state', null);
+const saveBoard = () => store.set('board-state', b);
+
+async function newBoard() {
+  const round = Number($('#b-round').value);
+  settings.board.round = round;
+  saveSettings();
+  const boardEl = $('#b-board');
+  $('#b-summary').replaceChildren();
+  boardEl.replaceChildren(el('p', { class: 'loading' }, 'Building a board…'));
+  try {
+    const cats = await source.board(round, { seasons: settings.seasons });
+    b = {
+      round,
+      cats,
+      dds: placeDailyDoubles(round, ddStats()).map(({ row, col }) => `${row},${col}`),
+      done: {},
+      score: 0, coryat: 0, right: 0, wrong: 0,
+      seasons: settings.seasons.slice(),
+      startedAt: new Date().toISOString(),
+      finished: false,
+    };
+    saveBoard();
+    showBanner('');
+    renderBoard();
+  } catch (err) {
+    boardEl.replaceChildren(el('div', { class: 'error' }, el('p', {}, friendlyError(err))));
+    showBanner(friendlyError(err));
+  }
+}
+
+function boardValue(row) {
+  return (row + 1) * (b.round === 2 ? 400 : 200);
+}
+
+function renderBoardScore() {
+  const left = b ? 30 - Object.keys(b.done).length : null;
+  $('#b-score').textContent = formatMoney(b?.score || 0);
+  $('#b-score').classList.toggle('neg', (b?.score || 0) < 0);
+  $('#b-coryat').textContent = formatMoney(b?.coryat || 0);
+  $('#b-right').textContent = b?.right || 0;
+  $('#b-wrong').textContent = b?.wrong || 0;
+  $('#b-left').textContent = left == null ? '–' : left;
+}
+
+function renderBoard() {
+  const boardEl = $('#b-board');
+  renderBoardScore();
+  if (!b) {
+    boardEl.replaceChildren(el('p', { class: 'muted center' }, 'Pick a round and start a new board.'));
+    return;
+  }
+  const cells = [];
+  b.cats.forEach((cat, col) => cells.push(el('div', { class: 'cat-head', style: `grid-column:${col + 1};grid-row:1` }, cat.name)));
+  for (let row = 0; row < 5; row++) {
+    b.cats.forEach((cat, col) => {
+      const key = `${row},${col}`;
+      const result = b.done[key];
+      const cell = el('button', {
+        class: `cell${result ? ` done ${result.result}` : ''}`,
+        style: `grid-column:${col + 1};grid-row:${row + 2}`,
+        disabled: Boolean(result) || b.finished,
+        'aria-label': `${cat.name} for ${formatMoney(boardValue(row))}`,
+        onclick: () => openCell(row, col),
+      }, result ? (result.result === 'skip' ? '' : (result.result === 'right' ? '✓' : '✗')) : formatMoney(boardValue(row)));
+      cells.push(cell);
+    });
+  }
+  boardEl.replaceChildren(...cells);
+  if (b.finished) renderSummary();
+}
+
+function openModal(content) {
+  const modal = $('#modal');
+  $('.modal-card', modal).replaceChildren(content);
+  modal.hidden = false;
+}
+
+function closeModal() {
+  $('#modal').hidden = true;
+  $('.modal-card', $('#modal')).replaceChildren();
+}
+
+function openCell(row, col) {
+  const key = `${row},${col}`;
+  const clue = b.cats[col].clues[row];
+  const natural = boardValue(row);
+  const isDD = b.dds.includes(key);
+  const showClue = (value, wager) => {
+    const card = clueCard({
+      clue: { ...clue, dd: isDD },
+      value,
+      valueLabel: isDD ? `Wager ${formatMoney(wager)}` : formatMoney(value),
+    }, (result) => {
+      if (result === 'right') { b.score += value; b.coryat += natural; b.right++; }
+      if (result === 'wrong') { b.score -= value; if (!isDD) b.coryat -= natural; b.wrong++; }
+      b.done[key] = { result, value, dd: isDD };
+      if (Object.keys(b.done).length === 30) finishBoard();
+      saveBoard();
+      closeModal();
+      renderBoard();
+    });
+    openModal(card);
+    card.focusInput();
+  };
+  if (!isDD) return showClue(natural);
+
+  const max = maxWager(b.score, b.round);
+  const wager = el('input', { type: 'number', min: 5, max, step: 1, value: Math.min(Math.max(b.score, 5), max), class: 'wager', required: true });
+  const form = el('form', {
+    class: 'dd',
+    onsubmit: (e) => {
+      e.preventDefault();
+      const w = Math.round(Number(wager.value));
+      if (!(w >= 5 && w <= max)) { wager.setCustomValidity(`Wager between $5 and ${formatMoney(max)}`); wager.reportValidity(); return; }
+      showClue(w, w);
+    },
+  },
+  el('h2', { class: 'dd-title' }, 'Daily Double!'),
+  el('p', {}, `${b.cats[col].name} · ${formatMoney(natural)} square`),
+  el('label', {}, `Your wager ($5 to ${formatMoney(max)})`, wager),
+  el('div', { class: 'row' },
+    el('button', { type: 'button', class: 'ghost', onclick: () => { wager.value = max; } }, 'True Daily Double'),
+    el('button', { type: 'submit', class: 'primary' }, 'Lock in wager')));
+  wager.addEventListener('input', () => wager.setCustomValidity(''));
+  openModal(form);
+  wager.focus();
+  wager.select();
+}
+
+function finishBoard() {
+  b.finished = true;
+  const history = store.get('board-history', []);
+  history.unshift({
+    at: new Date().toISOString(), round: b.round, score: b.score, coryat: b.coryat,
+    right: b.right, wrong: b.wrong, answered: Object.keys(b.done).length, seasons: b.seasons,
+  });
+  store.set('board-history', history.slice(0, 100));
+  saveBoard();
+  renderHistory();
+}
+
+function renderSummary() {
+  const answered = b.right + b.wrong;
+  const ddResults = Object.values(b.done).filter((d) => d.dd);
+  $('#b-summary').replaceChildren(el('div', { class: 'summary' },
+    el('h2', {}, `Final score: ${formatMoney(b.score)}`),
+    el('p', {}, `${ROUND_NAMES[b.round]} round. ${b.right} right, ${b.wrong} wrong, ${Object.keys(b.done).length - answered} skipped. ` +
+      `Coryat score ${formatMoney(b.coryat)}.`),
+    ddResults.length ? el('p', { class: 'muted' }, `Daily Doubles: ${ddResults.map((d) => `${d.result} for ${formatMoney(d.value)}`).join(', ')}.`) : null,
+    el('button', { class: 'primary', onclick: newBoard }, 'Play another board')));
+}
+
+function renderHistory() {
+  const history = store.get('board-history', []);
+  const box = $('#b-history');
+  if (!history.length) {
+    box.replaceChildren(el('p', { class: 'muted' }, 'Finished boards show up here.'));
+    return;
+  }
+  const avg = (r) => {
+    const h = history.filter((x) => x.round === r);
+    return h.length ? `${formatMoney(Math.round(h.reduce((s, x) => s + x.coryat, 0) / h.length))} average Coryat over ${h.length}` : null;
+  };
+  box.replaceChildren(
+    el('p', { class: 'muted' }, [avg(1) && `Jeopardy!: ${avg(1)}`, avg(2) && `Double Jeopardy!: ${avg(2)}`].filter(Boolean).join(' · ')),
+    el('table', {},
+      el('thead', {}, el('tr', {}, el('th', {}, 'Date'), el('th', {}, 'Round'), el('th', {}, 'Score'), el('th', {}, 'Coryat'), el('th', {}, 'Right'), el('th', {}, 'Wrong'))),
+      el('tbody', {}, history.map((h) => el('tr', {},
+        el('td', {}, new Date(h.at).toLocaleDateString()),
+        el('td', {}, h.round === 2 ? 'Double' : 'Jeopardy!'),
+        el('td', {}, formatMoney(h.score)),
+        el('td', {}, formatMoney(h.coryat)),
+        el('td', {}, h.right),
+        el('td', {}, h.wrong))))),
+    el('button', { class: 'ghost small', onclick: () => { store.del('board-history'); renderHistory(); } }, 'Clear history'));
+}
+
+function initBoardControls() {
+  $('#b-round').value = String(settings.board.round);
+  $('#b-new').addEventListener('click', newBoard);
+  $('#b-end').addEventListener('click', () => {
+    if (!b || b.finished) return;
+    if (!confirm('End this board and record the score?')) return;
+    finishBoard();
+    renderBoard();
+  });
+  $('#modal').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $('#modal form.dd')) closeModal();
+  });
+}
+
+// ------------------------------------------------------------------ settings
+
+function renderDDOdds() {
+  const stats = ddStats();
+  $('#s-dd-source').textContent = source?.ddStats
+    ? 'Measured from the Daily Doubles in your imported dataset.'
+    : 'Measured from every Daily Double in seasons 1–42 (9,345 games). Importing a dataset replaces these with counts from its games.';
+  const table = (round) => {
+    const pct = rowPercentages(stats, round);
+    return el('table', { class: 'dd-table' },
+      el('caption', {}, `${ROUND_NAMES[round]} (${round === 1 ? 'one Daily Double' : 'two, never in the same category'})`),
+      el('tbody', {}, pct.map((p, row) => el('tr', {},
+        el('th', {}, formatMoney((row + 1) * (round === 2 ? 400 : 200))),
+        el('td', {}, el('span', { class: 'bar', style: `width:${Math.max(p, 0.5) * 2}px` }), ` ${p}%`)))));
+  };
+  $('#s-dd').replaceChildren(table(1), table(2));
+}
+
+function renderImportStatus() {
+  const status = $('#s-import-status');
+  $('#s-clear').hidden = !localMeta;
+  if (!localMeta) {
+    status.textContent = 'No dataset imported yet.';
+    return;
+  }
+  const total = localMeta.seasons.reduce((s, x) => s + x.count, 0);
+  const first = localMeta.seasons[0]?.season;
+  const last = localMeta.seasons.at(-1)?.season;
+  status.textContent = `${total.toLocaleString()} clues from seasons ${first}–${last}, imported ${new Date(localMeta.importedAt).toLocaleString()}.`;
+}
+
+async function importFiles(files) {
+  const progress = $('#s-progress');
+  const status = $('#s-import-status');
+  const builder = new DatasetBuilder();
+  const totalBytes = files.reduce((s, f) => s + f.size, 0);
+  let readBytes = 0;
+  progress.hidden = false;
+  progress.max = totalBytes;
+  progress.value = 0;
+  try {
+    for (const file of files) {
+      status.textContent = `Reading ${file.name}…`;
+      builder.startFile();
+      const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+      let rest = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        readBytes += value.length;
+        progress.value = Math.min(readBytes, totalBytes);
+        const lines = (rest + value).split(/\r?\n/);
+        rest = lines.pop();
+        for (const line of lines) builder.addLine(line);
+      }
+      if (rest) builder.addLine(rest);
+    }
+    status.textContent = 'Saving…';
+    const result = builder.finish();
+    if (!result.rows) throw new Error('No clues found in those files.');
+    localMeta = await saveDataset({ bySeason: result.bySeason, ddStats: result.ddStats, files: files.map((f) => f.name) });
+    settings.source = 'local';
+    settings.seasons = [];
+    saveSettings();
+    $('input[name=source][value=local]').checked = true;
+    await switchSource();
+  } catch (err) {
+    status.textContent = `Import failed: ${friendlyError(err)}`;
+    return;
+  } finally {
+    progress.hidden = true;
+  }
+  renderImportStatus();
+}
+
+async function switchSource() {
+  buildSource();
+  renderDDOdds();
+  refreshSeasonSummaries();
+  showBanner('');
+  $('#s-seasons').replaceChildren(el('p', { class: 'muted' }, 'Loading seasons…'));
+  resetUnlimitedQueue();
+  await loadSeasonList();
+}
+
+function initSettings() {
+  const url = $('#s-url');
+  url.value = settings.cluebaseUrl;
+  for (const radio of $$('input[name=source]')) {
+    radio.checked = radio.value === settings.source;
+    radio.addEventListener('change', () => {
+      if (radio.value === 'local' && !localMeta) {
+        $('#s-import-status').textContent = 'Import a dataset first.';
+        $('input[name=source][value=cluebase]').checked = true;
+        return;
+      }
+      settings.source = radio.value;
+      settings.seasons = [];
+      saveSettings();
+      switchSource();
+    });
+  }
+  url.addEventListener('change', () => {
+    settings.cluebaseUrl = url.value.trim() || DEFAULT_CLUEBASE_URL;
+    saveSettings();
+    if (settings.source === 'cluebase') switchSource();
+  });
+  $('#s-test').addEventListener('click', async () => {
+    const out = $('#s-test-result');
+    out.textContent = 'Testing…';
+    try {
+      const test = new CluebaseSource(url.value || DEFAULT_CLUEBASE_URL);
+      const clue = await test.get('/clues/random?limit=1');
+      out.textContent = `Connected. Sample category: ${clue[0]?.category ?? 'unknown'}.`;
+    } catch (err) {
+      out.textContent = friendlyError(err);
+    }
+  });
+  $('#s-file').addEventListener('change', (e) => {
+    // Copy the list first: clearing the input below empties the live FileList.
+    if (e.target.files.length) importFiles([...e.target.files]);
+    e.target.value = '';
+  });
+  $('#s-clear').addEventListener('click', async () => {
+    if (!confirm('Remove the imported clues from this browser?')) return;
+    await clearDataset();
+    localMeta = null;
+    settings.source = 'cluebase';
+    settings.seasons = [];
+    saveSettings();
+    $('input[name=source][value=cluebase]').checked = true;
+    renderImportStatus();
+    switchSource();
+  });
+  $('#s-all').addEventListener('click', () => setSeasons(seasonList.map((s) => s.id)));
+  $('#s-none').addEventListener('click', () => {
+    // At least one season has to stay selected; keep the most recent.
+    if (seasonList.length) setSeasons([seasonList.at(-1).id]);
+  });
+  $('#s-modern').addEventListener('click', () => setSeasons(seasonList.map((s) => s.id).filter((id) => id >= 18)));
+}
+
+// ------------------------------------------------------------------ views
+
+let currentView = null;
+
+function showView(name) {
+  currentView = name;
+  settings.view = name;
+  saveSettings();
+  for (const v of $$('.view')) v.hidden = v.id !== `view-${name}`;
+  for (const t of $$('.tab')) t.setAttribute('aria-selected', String(t.dataset.view === name));
+  if (name === 'unlimited' && !$('#u-stage').children.length) nextUnlimited();
+  if (name === 'board') renderBoard();
+}
+
+async function init() {
+  localMeta = await loadMeta();
+  if (!settings.source) settings.source = localMeta ? 'local' : 'cluebase';
+  if (settings.source === 'local' && !localMeta) settings.source = 'cluebase';
+  buildSource();
+  initUnlimitedControls();
+  initBoardControls();
+  initSettings();
+  renderImportStatus();
+  renderDDOdds();
+  renderUnlimitedScore();
+  renderHistory();
+  refreshSeasonSummaries();
+  for (const t of $$('.tab')) t.addEventListener('click', () => showView(t.dataset.view));
+  showView(settings.view);
+  loadSeasonList();
+}
+
+init();
