@@ -64,12 +64,30 @@
             <option value="2">Double Jeopardy! ($400 to $2,000)</option>
           </select>
         </label>
+        <label>Board
+          <select id="b-style">
+            <option value="episode">Real episode</option>
+            <option value="mixed">Mixed from 10 episodes</option>
+          </select>
+        </label>
+        <label>Players
+          <select id="b-mode">
+            <option value="1">1 (practice)</option>
+            <option value="3">3 players</option>
+          </select>
+        </label>
+        <span id="b-names" class="names">
+          <input type="text" class="b-name" aria-label="Player 1 name" maxlength="20">
+          <input type="text" class="b-name" aria-label="Player 2 name" maxlength="20">
+          <input type="text" class="b-name" aria-label="Player 3 name" maxlength="20">
+        </span>
         <button id="b-new" class="primary">New board</button>
         <button id="b-end" class="ghost">End board</button>
         <span class="season-summary"></span>
       </div>
 
-      <div class="scorebar">
+      <div id="b-players" class="players" hidden></div>
+      <div id="b-scorebar" class="scorebar">
         <div><span class="label">Score</span><strong id="b-score">$0</strong></div>
         <div><span class="label">Coryat</span><strong id="b-coryat">$0</strong></div>
         <div><span class="label">Right</span><strong id="b-right">0</strong></div>
@@ -90,6 +108,13 @@
     <section id="view-settings" class="view" hidden>
       <div class="panel">
         <h2>Clue source</h2>
+        <label class="radio"><input type="radio" name="source" value="dataset"> Jeopardy! clue dataset (recommended)</label>
+        <div class="indent">
+          <p class="muted">Clues come from the
+            <a href="https://github.com/jwolle1/jeopardy_clue_dataset" target="_blank" rel="noopener">Jeopardy! clue dataset</a>
+            on GitHub. The app fetches only the episodes it needs, about 8 KB each, straight from GitHub.</p>
+        </div>
+
         <label class="radio"><input type="radio" name="source" value="cluebase"> Cluebase API</label>
         <div class="indent">
           <label>API URL <input id="s-url" type="url" placeholder="https://cluebase.lukelav.in" spellcheck="false"></label>
@@ -97,18 +122,6 @@
           <p id="s-test-result" class="muted"></p>
           <p class="muted">The public instance at cluebase.lukelav.in stopped resolving in 2026. If you run your own copy of
             <a href="https://github.com/lukelavin/cluebase" target="_blank" rel="noopener">Cluebase</a>, enter its URL here. It must allow cross-origin requests.</p>
-        </div>
-
-        <label class="radio"><input type="radio" name="source" value="local"> Imported dataset (stays in this browser)</label>
-        <div class="indent">
-          <p class="muted">Download the TSV files from the
-            <a href="https://github.com/jwolle1/jeopardy_clue_dataset/releases" target="_blank" rel="noopener">Jeopardy! clue dataset</a>
-            (the combined file or individual seasons), then load them here. You can pick several files at once.
-            Nothing is uploaded anywhere.</p>
-          <input id="s-file" type="file" accept=".tsv,.txt,text/tab-separated-values" multiple>
-          <progress id="s-progress" hidden></progress>
-          <p id="s-import-status" class="muted"></p>
-          <button id="s-clear" class="ghost danger" hidden>Remove imported data</button>
         </div>
       </div>
 

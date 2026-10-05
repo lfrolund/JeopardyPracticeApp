@@ -5,7 +5,7 @@
 //   board(round, { seasons })      -> [{ name, airDate, clues: [clue x5] }] x6
 //   ddStats                        -> Daily Double odds to use, or null for the defaults
 // A clue is { round, value, dd, category, clue, response, airDate, season, comments }.
-import { F } from './tsv.js';
+import { F, headerIndex, rowToClue } from './tsv.js';
 import { modernValue, normalizeRound, parseValue, pick, rowForValue, seasonFromDate, shuffle, weightedIndex } from './util.js';
 
 const roundValue = (row, round) => (row + 1) * (round === 2 ? 400 : 200);
@@ -28,98 +28,158 @@ export function completeCategory(clues, round) {
   return rows.every(Boolean) ? rows : null;
 }
 
-// ---------------------------------------------------------------- local dataset
+// ---------------------------------------------------------------- GitHub dataset
 
-export class LocalSource {
-  constructor(meta, loadSeason) {
-    this.meta = meta;
-    this.loadSeason = loadSeason;
-    this.cache = new Map();
-    this.ddStats = meta.ddStats && Object.keys(meta.ddStats).length ? meta.ddStats : null;
-    this.label = 'Imported dataset';
+// Clues from github.com/jwolle1/jeopardy_clue_dataset, fetched one episode at a time.
+// data/index.json (built by scripts/build-index.mjs) records where each episode's rows sit
+// in its season file at a pinned commit, so an episode is a single small HTTP range request
+// (about 8 KB) to raw.githubusercontent.com, which allows cross-origin requests.
+const EPISODES_IN_MEMORY = 80;
+
+export class EpisodeSource {
+  constructor({ indexUrl = 'data/index.json', fetchFn = (...a) => fetch(...a) } = {}) {
+    this.indexUrl = indexUrl;
+    this.fetchFn = fetchFn;
+    this.loaded = null;
+    this.episodes = new Map();
+    this.ddStats = null;
+    this.label = 'Jeopardy! clue dataset';
+  }
+
+  index() {
+    this.loaded ||= (async () => {
+      const res = await this.fetchFn(this.indexUrl);
+      if (!res.ok) throw new Error(`Couldn't load the episode index (${res.status}).`);
+      const index = await res.json();
+      this.header = headerIndex(index.header);
+      this.base = `https://raw.githubusercontent.com/${index.repo}/${index.ref}/seasons`;
+      if (index.ddStats) this.ddStats = index.ddStats;
+      this.games = index.seasons.flatMap((s) => s.games.map(([airDate, start, length, j, dj, fj, cj, cdj]) => ({
+        season: s.season, airDate, start, length, clues: [0, j, dj, fj], complete: [0, cj, cdj],
+      })));
+      this.seasonIds = index.seasons.map((s) => s.season);
+      return index;
+    })();
+    this.loaded.catch(() => { this.loaded = null; });
+    return this.loaded;
   }
 
   async seasons() {
-    return this.meta.seasons.map((s) => ({ id: s.season, label: `Season ${s.season}`, count: s.count }));
+    await this.index();
+    return this.seasonIds.map((id) => ({ id, label: `Season ${id}` }));
   }
 
-  allowedSeasons(seasons) {
-    const all = this.meta.seasons;
-    const list = seasons && seasons.length ? all.filter((s) => seasons.includes(s.season)) : all;
-    if (!list.length) throw new Error('No clues for the selected seasons.');
-    return list;
+  async gamesFor(seasons, weightFn) {
+    await this.index();
+    const list = this.games.filter((g) => (!seasons?.length || seasons.includes(g.season)) && weightFn(g) > 0);
+    if (!list.length) throw new Error('No episodes match those settings.');
+    return { list, weights: list.map(weightFn) };
   }
 
-  async season(id) {
-    if (!this.cache.has(id)) {
-      const clues = (await this.loadSeason(id)).map((t) => ({
+  // One episode's clues, grouped into categories in board order.
+  async episode(game) {
+    const key = `${game.season}|${game.start}`;
+    if (!this.episodes.has(key)) {
+      const job = this.fetchEpisode(game);
+      this.episodes.set(key, job);
+      job.catch(() => this.episodes.delete(key));
+      if (this.episodes.size > EPISODES_IN_MEMORY) this.episodes.delete(this.episodes.keys().next().value);
+    }
+    return this.episodes.get(key);
+  }
+
+  async fetchEpisode(game) {
+    const end = game.start + game.length - 1;
+    let res;
+    try {
+      res = await this.fetchFn(`${this.base}/season${game.season}.tsv`, { headers: { Range: `bytes=${game.start}-${end}` } });
+    } catch {
+      throw new Error('Couldn’t reach GitHub to load clues. Check your connection and try again.');
+    }
+    if (!res.ok) throw new Error(`GitHub returned ${res.status} while loading clues.`);
+    let bytes = new Uint8Array(await res.arrayBuffer());
+    // A server that ignores Range sends the whole file; take the episode's slice.
+    if (res.status === 200 && bytes.length > game.length) bytes = bytes.subarray(game.start, end + 1);
+    const text = new TextDecoder().decode(bytes);
+    const clues = [];
+    const cols = new Map();
+    for (const line of text.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      const t = rowToClue(line, this.header);
+      if (!t) continue;
+      const roundKey = `${t[F.round]}|${t[F.category]}`;
+      if (!cols.has(roundKey)) cols.set(roundKey, [...cols.keys()].filter((k) => k.startsWith(`${t[F.round]}|`)).length);
+      clues.push({
         round: t[F.round], value: t[F.value], dd: t[F.dd] > 0, category: t[F.category], clue: t[F.clue],
-        response: t[F.response], airDate: t[F.airDate], comments: t[F.comments], col: t[F.col], season: id,
-      }));
-      const groups = new Map();
-      for (const c of clues) {
-        const key = `${c.airDate}|${c.round}|${c.category}`;
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(c);
-      }
-      this.cache.set(id, { clues, groups: [...groups.values()] });
-      // Hold a few seasons in memory at most.
-      if (this.cache.size > 6) this.cache.delete(this.cache.keys().next().value);
+        response: t[F.response], airDate: t[F.airDate], comments: t[F.comments], col: cols.get(roundKey), season: game.season,
+      });
     }
-    return this.cache.get(id);
+    const groups = new Map();
+    for (const c of clues) {
+      const k = `${c.round}|${c.category}`;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(c);
+    }
+    return { clues, groups: [...groups.values()] };
   }
 
-  async randomSeason(seasons) {
-    const list = this.allowedSeasons(seasons);
-    const s = list[weightedIndex(list.map((x) => x.count))];
-    return this.season(s.season);
-  }
-
+  // Episodes are picked in proportion to how many matching clues they hold, so every clue
+  // is about equally likely. Each clue in a batch comes from its own random episode.
   async randomClues(n, { seasons, rounds }) {
-    const out = [];
-    for (let tries = 0; out.length < n && tries < n * 20; tries++) {
-      const { clues } = await this.randomSeason(seasons);
-      const c = pick(clues);
-      if (rounds.includes(c.round)) out.push(c);
-    }
+    const { list, weights } = await this.gamesFor(seasons, (g) => rounds.reduce((s, r) => s + g.clues[r], 0));
+    const picks = Array.from({ length: n }, () => list[weightedIndex(weights)]);
+    const eps = await Promise.all(picks.map((g) => this.episode(g)));
+    const out = eps.map((ep) => pick(ep.clues.filter((c) => rounds.includes(c.round)))).filter(Boolean);
     if (!out.length) throw new Error('No clues matched those settings.');
     return out;
   }
 
   async randomCategory({ seasons, rounds }) {
-    for (let tries = 0; tries < 60; tries++) {
-      const { groups } = await this.randomSeason(seasons);
-      const g = pick(groups);
-      if (!rounds.includes(g[0].round)) continue;
-      if (g[0].round !== 3 && g.length < 3) continue;
-      return g.slice().sort((a, b) => a.value - b.value);
+    const { list, weights } = await this.gamesFor(seasons, (g) => rounds.reduce((s, r) => s + g.clues[r], 0));
+    for (let tries = 0; tries < 8; tries++) {
+      const ep = await this.episode(list[weightedIndex(weights)]);
+      const cats = ep.groups.filter((g) => rounds.includes(g[0].round) && (g[0].round === 3 || g.length >= 3));
+      if (cats.length) return pick(cats).slice().sort((a, b) => a.value - b.value);
     }
     throw new Error('Could not find a category for those settings.');
   }
 
-  async board(round, { seasons }) {
-    // Prefer a real game's board: all six categories from one episode.
-    for (let tries = 0; tries < 40; tries++) {
-      const { groups } = await this.randomSeason(seasons);
-      const anchor = pick(groups);
-      if (anchor[0].round !== round) continue;
-      const game = groups.filter((g) => g[0].airDate === anchor[0].airDate && g[0].round === round);
-      const cats = game
-        .map((g) => ({ name: g[0].category, airDate: g[0].airDate, col: g[0].col, clues: completeCategory(g, round) }))
-        .filter((c) => c.clues);
-      if (cats.length >= 6) return cats.sort((a, b) => a.col - b.col).slice(0, 6);
+  completeCats(ep, round) {
+    return ep.groups
+      .filter((g) => g[0].round === round)
+      .map((g) => ({ name: g[0].category, airDate: g[0].airDate, col: g[0].col, clues: completeCategory(g, round) }))
+      .filter((c) => c.clues);
+  }
+
+  // style 'episode': a real game's board, all six categories from one episode.
+  // style 'mixed': six categories drawn from ten random episodes, one per episode where possible.
+  async board(round, { seasons, style = 'episode' }) {
+    await this.index();
+    if (style === 'episode') {
+      const full = this.games.filter((g) => (!seasons?.length || seasons.includes(g.season)) && g.complete[round] >= 6);
+      if (full.length) {
+        const cats = this.completeCats(await this.episode(pick(full)), round);
+        if (cats.length >= 6) return cats.sort((a, b) => a.col - b.col).slice(0, 6);
+      }
+      // No complete episode in these seasons (common in early seasons): fall back to a mix.
     }
-    // Otherwise mix complete categories from different games.
+    return this.mixedBoard(round, seasons);
+  }
+
+  async mixedBoard(round, seasons, episodes = 10) {
+    const { list, weights } = await this.gamesFor(seasons, (g) => g.complete[round]);
     const cats = [];
-    for (let tries = 0; cats.length < 6 && tries < 200; tries++) {
-      const { groups } = await this.randomSeason(seasons);
-      const g = pick(groups);
-      if (g[0].round !== round) continue;
-      const clues = completeCategory(g, round);
-      if (clues && !cats.some((c) => c.name === g[0].category)) cats.push({ name: g[0].category, airDate: g[0].airDate, clues });
+    const add = (c) => {
+      if (cats.length < 6 && !cats.some((x) => x.name === c.name)) cats.push(c);
+    };
+    for (let tries = 0, batch = episodes; cats.length < 6 && tries < 4; tries++, batch = 5) {
+      const eps = await Promise.all(Array.from({ length: batch }, () => this.episode(list[weightedIndex(weights)])));
+      const perEpisode = eps.map((ep) => shuffle(this.completeCats(ep, round)));
+      for (const options of perEpisode) if (options.length) add(options[0]);
+      for (const c of shuffle(perEpisode.flatMap((o) => o.slice(1)))) add(c);
     }
     if (cats.length < 6) throw new Error('Not enough complete categories for a board with those seasons.');
-    return cats;
+    return shuffle(cats);
   }
 }
 

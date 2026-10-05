@@ -1,19 +1,18 @@
 // Daily Double placement that follows the show's observed odds.
 //
-// The default counts are where Daily Doubles actually landed in seasons 1 to 42
-// (9,345 games, through July 2026), measured from the Jeopardy! clue dataset
-// (github.com/jwolle1/jeopardy_clue_dataset) with the same code that measures an imported
-// dataset (DatasetBuilder.finish). Rows run top ($200) to bottom; columns left to right,
-// counted only in rounds where all six categories survived the dataset's cleanup.
-// Row and column are drawn independently, and the two Double Jeopardy! Daily Doubles
-// never share a category, which is how the show places them (Tesauro et al., "Analysis of
-// Watson's Strategies for Playing Jeopardy!", arXiv:1402.0571). An imported dataset
-// replaces these with counts measured from its own games.
+// The counts are where Daily Doubles actually landed in seasons 1 to 42 (9,354 episodes,
+// through July 2026) of the Jeopardy! clue dataset (github.com/jwolle1/jeopardy_clue_dataset).
+// scripts/build-index.mjs measures them and stores them in data/index.json, which the app
+// prefers; these are the same numbers, used if the index isn't loaded. Rows run top to bottom.
+// Columns run left to right and are counted only in rounds where all six categories survived
+// the dataset's cleanup. Row and column are drawn independently, and the two Double Jeopardy!
+// Daily Doubles never share a category, which is how the show places them (Tesauro et al.,
+// "Analysis of Watson's Strategies for Playing Jeopardy!", arXiv:1402.0571).
 import { weightedIndex } from './util.js';
 
 export const DEFAULT_DD_STATS = {
-  1: { rows: [3, 619, 2105, 3152, 2832], cols: [1834, 1204, 1531, 1682, 1388, 895], source: 'seasons 1–42' },
-  2: { rows: [25, 1731, 4961, 6775, 4210], cols: [3497, 2554, 3261, 3004, 2919, 2170], source: 'seasons 1–42' },
+  1: { rows: [3, 545, 1855, 2859, 2657], cols: [1694, 1087, 1397, 1546, 1248, 798] },
+  2: { rows: [24, 1510, 4315, 5989, 3860], cols: [3117, 2259, 2890, 2686, 2591, 1907] },
 };
 
 export const DD_COUNT = { 1: 1, 2: 2 };
