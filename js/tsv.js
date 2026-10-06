@@ -2,7 +2,7 @@
 // (github.com/jwolle1/jeopardy_clue_dataset). Columns, in any order:
 // round, clue_value, daily_double_value, category, comments, answer, question, air_date, notes
 // Note that the dataset's "answer" column is the clue text and "question" is the response.
-import { modernValue, normalizeRound, parseValue } from './util.js';
+import { modernValue, normalizeRound, parseValue } from './util.js?v=2026-10-06';
 
 // Parsed clue tuple: [round, value, ddWager, category, clue, response, airDate, comments]
 export const F = { round: 0, value: 1, dd: 2, category: 3, clue: 4, response: 5, airDate: 6, comments: 7 };

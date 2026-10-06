@@ -8,7 +8,7 @@
 // the dataset's cleanup. Row and column are drawn independently, and the two Double Jeopardy!
 // Daily Doubles never share a category, which is how the show places them (Tesauro et al.,
 // "Analysis of Watson's Strategies for Playing Jeopardy!", arXiv:1402.0571).
-import { weightedIndex } from './util.js';
+import { weightedIndex } from './util.js?v=2026-10-06';
 
 export const DEFAULT_DD_STATS = {
   1: { rows: [3, 545, 1855, 2859, 2657], cols: [1694, 1087, 1397, 1546, 1248, 798] },

@@ -153,3 +153,24 @@ test('completeCategory fills a Daily Double stored at its wager', () => {
   assert.deepEqual(out.map((c) => c.value), [200, 400, 600, 800, 1000]);
   assert.equal(completeCategory([mk(200), mk(400)], 1), null);
 });
+
+test('index.html and every module import share one cache-busting version', async () => {
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const root = new URL('../', import.meta.url);
+  const versions = new Set();
+  const html = readFileSync(new URL('index.html', root), 'utf8');
+  for (const ref of ['styles.css', 'js/app.js']) {
+    const m = html.match(new RegExp(`"${ref.replace('.', '\\.')}\\?v=([^"]+)"`));
+    assert.ok(m, `index.html loads ${ref} without ?v=`);
+    versions.add(m[1]);
+  }
+  for (const file of readdirSync(new URL('js/', root))) {
+    const src = readFileSync(new URL(`js/${file}`, root), 'utf8');
+    for (const [, spec] of src.matchAll(/from '(\.\/[^']+)'/g)) {
+      const m = spec.match(/\?v=(.+)$/);
+      assert.ok(m, `js/${file} imports ${spec} without ?v=`);
+      versions.add(m[1]);
+    }
+  }
+  assert.equal(versions.size, 1, `mixed versions: ${[...versions].join(', ')}`);
+});

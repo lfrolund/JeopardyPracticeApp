@@ -5,8 +5,8 @@
 //   board(round, { seasons })      -> [{ name, airDate, clues: [clue x5] }] x6
 //   ddStats                        -> Daily Double odds to use, or null for the defaults
 // A clue is { round, value, dd, category, clue, response, airDate, season, comments }.
-import { F, headerIndex, rowToClue } from './tsv.js';
-import { modernValue, normalizeRound, parseValue, pick, rowForValue, seasonFromDate, shuffle, weightedIndex } from './util.js';
+import { F, headerIndex, rowToClue } from './tsv.js?v=2026-10-06';
+import { modernValue, normalizeRound, parseValue, pick, rowForValue, seasonFromDate, shuffle, weightedIndex } from './util.js?v=2026-10-06';
 
 const roundValue = (row, round) => (row + 1) * (round === 2 ? 400 : 200);
 

@@ -1,8 +1,8 @@
-import { DEFAULT_DD_STATS, maxWager, placeDailyDoubles, rowPercentages } from './dd.js';
-import { isLikelyCorrect } from './grade.js';
-import { countdown } from './timer.js';
-import { CluebaseSource, DEFAULT_CLUEBASE_URL, EpisodeSource } from './sources.js';
-import { ROUND_NAMES, formatMoney, shuffle } from './util.js';
+import { DEFAULT_DD_STATS, maxWager, placeDailyDoubles, rowPercentages } from './dd.js?v=2026-10-06';
+import { isLikelyCorrect } from './grade.js?v=2026-10-06';
+import { countdown } from './timer.js?v=2026-10-06';
+import { CluebaseSource, DEFAULT_CLUEBASE_URL, EpisodeSource } from './sources.js?v=2026-10-06';
+import { ROUND_NAMES, formatMoney, shuffle } from './util.js?v=2026-10-06';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
