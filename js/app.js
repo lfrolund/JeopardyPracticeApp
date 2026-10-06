@@ -1,5 +1,6 @@
 import { DEFAULT_DD_STATS, maxWager, placeDailyDoubles, rowPercentages } from './dd.js';
 import { isLikelyCorrect } from './grade.js';
+import { countdown } from './timer.js';
 import { CluebaseSource, DEFAULT_CLUEBASE_URL, EpisodeSource } from './sources.js';
 import { ROUND_NAMES, formatMoney, shuffle } from './util.js';
 
@@ -42,6 +43,7 @@ const DEFAULT_SETTINGS = {
   cluebaseUrl: DEFAULT_CLUEBASE_URL,
   seasons: [],
   unlimited: { mode: 'clues', order: 'random', rounds: [1, 2] },
+  timer: { on: true, seconds: 15 },
   board: { round: 1, style: 'episode', players: 1, names: ['Player 1', 'Player 2', 'Player 3'] },
 };
 
@@ -51,6 +53,7 @@ const settings = {
   ...loaded,
   unlimited: { ...DEFAULT_SETTINGS.unlimited, ...loaded.unlimited },
   board: { ...DEFAULT_SETTINGS.board, ...loaded.board },
+  timer: { ...DEFAULT_SETTINGS.timer, ...loaded.timer },
 };
 const saveSettings = () => store.set('settings', settings);
 
@@ -152,8 +155,15 @@ function renderSeasonGrid() {
 
 // Renders a clue with an optional typed response, reveal, and self-grading.
 // onResult receives 'right', 'wrong', or 'skip'.
+// A countdown for one clue when the timer setting is on, else null.
+function clueTimer(onExpire) {
+  return settings.timer.on ? countdown(settings.timer.seconds, onExpire) : null;
+}
+
 function clueCard({ clue, value, valueLabel, footer }, onResult) {
   let revealed = false;
+  let timedOut = false;
+  const timer = clueTimer(() => { timedOut = true; reveal(); });
   const input = el('input', { type: 'text', class: 'answer', placeholder: 'Your response (optional)', autocomplete: 'off', spellcheck: 'false' });
   const revealBtn = el('button', { class: 'primary', onclick: reveal }, 'Reveal');
   const after = el('div', { class: 'after', hidden: true });
@@ -163,6 +173,7 @@ function clueCard({ clue, value, valueLabel, footer }, onResult) {
     el('span', { class: 'val' }, valueLabel ?? (value ? formatMoney(value) : ROUND_NAMES[clue.round])),
     clue.dd ? el('span', { class: 'tag' }, 'Daily Double') : null,
     el('span', { class: 'muted' }, [ROUND_NAMES[clue.round], clue.airDate].filter(Boolean).join(' · ')),
+    timer?.el,
   );
 
   const card = el('div', { class: 'clue-card' },
@@ -175,6 +186,7 @@ function clueCard({ clue, value, valueLabel, footer }, onResult) {
   );
 
   function finish(result) {
+    timer?.stop();
     document.removeEventListener('keydown', onKey);
     onResult(result);
   }
@@ -182,6 +194,7 @@ function clueCard({ clue, value, valueLabel, footer }, onResult) {
   function reveal() {
     if (revealed) return;
     revealed = true;
+    timer?.stop();
     input.disabled = true;
     revealBtn.hidden = true;
     const guess = input.value.trim();
@@ -192,6 +205,7 @@ function clueCard({ clue, value, valueLabel, footer }, onResult) {
     const skipBtn = el('button', { class: 'ghost', onclick: () => finish('skip') }, 'Skip');
     // replaceChildren would print a null as the text "null", so the optional hint is filtered out.
     after.replaceChildren(...[
+      timedOut ? el('p', { class: 'hint bad' }, 'Time’s up!') : null,
       el('p', { class: 'response' }, clue.response),
       likely == null ? null : el('p', { class: likely ? 'hint good' : 'hint bad' },
         likely ? 'Your response looks right.' : 'Your response doesn’t look like a match.'),
@@ -213,6 +227,9 @@ function clueCard({ clue, value, valueLabel, footer }, onResult) {
   document.addEventListener('keydown', onKey);
 
   card.focusInput = () => input.focus();
+  // The unlimited tab pauses its clock while another tab is open and restarts it on return.
+  card.pause = () => { if (!revealed) timer?.stop(); };
+  card.resume = () => { if (!revealed) timer?.restart(); };
   return card;
 }
 
@@ -295,6 +312,7 @@ async function nextUnlimited() {
     nextUnlimited();
   });
   stage.replaceChildren(card);
+  u.card = card;
   card.focusInput();
   // Fetch the next batch in the background while this clue is up.
   if (u.queue.length < 2) ensureLoading().catch(() => {});
@@ -518,18 +536,40 @@ function openCellMulti(row, col) {
     const attempts = [];
     let answering = only;
     let showResponse = false;
+    let timedOut = false;
+    // Runs while players are deciding whether to ring in; pauses once someone is answering
+    // (except on a Daily Double) and starts over for the others after a miss.
+    const timer = clueTimer(() => {
+      timedOut = true;
+      if (answering == null) { showResponse = true; draw(true); } else draw();
+    });
     const body = el('div');
     const card = el('div', { class: 'clue-card' },
       el('div', { class: 'clue-meta' },
         el('span', { class: 'cat' }, clue.category),
         el('span', { class: 'val' }, isDD ? `${players[only].name} wagered ${formatMoney(value)}` : formatMoney(value)),
         isDD ? el('span', { class: 'tag' }, 'Daily Double') : null,
-        el('span', { class: 'muted' }, [ROUND_NAMES[clue.round], clue.airDate].filter(Boolean).join(' · '))),
+        el('span', { class: 'muted' }, [ROUND_NAMES[clue.round], clue.airDate].filter(Boolean).join(' · ')),
+        timer?.el),
       clue.comments ? el('p', { class: 'comments' }, clue.comments) : null,
       el('p', { class: 'clue-text' }, clue.clue),
       body);
 
-    const finish = (result, by) => recordCell(key, { result, by, value, dd: isDD, attempts });
+    const finish = (result, by) => {
+      timer?.stop();
+      recordCell(key, { result, by, value, dd: isDD, attempts });
+    };
+    const pickPlayer = (i) => {
+      answering = i;
+      timer?.stop();
+      draw();
+    };
+    const reopen = () => {
+      answering = null;
+      timedOut = false;
+      timer?.restart();
+      draw();
+    };
 
     const grade = (i, right) => {
       const p = players[i];
@@ -547,12 +587,14 @@ function openCellMulti(row, col) {
         showResponse = true;
         return draw(true);
       }
-      draw();
+      reopen();
     };
 
     function draw(closed = false) {
       const tried = new Set(attempts.map((a) => a.by));
       const parts = [];
+      if (closed) timer?.stop();
+      if (timedOut) parts.push(el('p', { class: 'hint bad' }, 'Time’s up!'));
       if (attempts.length) {
         parts.push(el('ul', { class: 'attempts' }, attempts.map((a) => el('li', {},
           `${players[a.by].name}: ${a.result} (${a.result === 'right' ? '+' : '−'}${formatMoney(value)})`))));
@@ -564,14 +606,14 @@ function openCellMulti(row, col) {
       } else if (answering == null) {
         parts.push(el('p', { class: 'ask' }, attempts.length ? 'Anyone else?' : 'Who’s answering?'));
         parts.push(el('div', { class: 'grade-row' },
-          players.map((p, i) => tried.has(i) ? null : el('button', { class: 'ghost', onclick: () => { answering = i; draw(); } }, p.name)),
+          players.map((p, i) => tried.has(i) ? null : el('button', { class: 'ghost', onclick: () => pickPlayer(i) }, p.name)),
           el('button', { class: 'ghost', onclick: () => { showResponse = true; draw(true); } }, 'No one')));
       } else {
         parts.push(el('p', { class: 'ask' }, `${players[answering].name} is answering`));
         parts.push(el('div', { class: 'grade-row' },
           el('button', { class: 'right', onclick: () => grade(answering, true) }, `Right (+${formatMoney(value)})`),
           el('button', { class: 'wrong', onclick: () => grade(answering, false) }, `Wrong (−${formatMoney(value)})`),
-          only == null ? el('button', { class: 'ghost', onclick: () => { answering = null; draw(); } }, 'Someone else') : null));
+          only == null ? el('button', { class: 'ghost', onclick: reopen }, 'Someone else') : null));
       }
       if (!showResponse && !closed) {
         parts.push(el('p', {}, el('button', { class: 'link small', onclick: () => { showResponse = true; draw(); } }, 'Show response')));
@@ -757,6 +799,22 @@ function initSettings() {
       out.textContent = friendlyError(err);
     }
   });
+  const timerOn = $('#s-timer-on');
+  const timerSecs = $('#s-timer-seconds');
+  timerOn.checked = settings.timer.on;
+  timerSecs.value = settings.timer.seconds;
+  timerSecs.disabled = !settings.timer.on;
+  timerOn.addEventListener('change', () => {
+    settings.timer.on = timerOn.checked;
+    timerSecs.disabled = !timerOn.checked;
+    saveSettings();
+  });
+  timerSecs.addEventListener('change', () => {
+    const n = Math.round(Number(timerSecs.value));
+    settings.timer.seconds = Number.isFinite(n) ? Math.min(120, Math.max(3, n)) : 15;
+    timerSecs.value = settings.timer.seconds;
+    saveSettings();
+  });
   $('#s-all').addEventListener('click', () => setSeasons(seasonList.map((s) => s.id)));
   $('#s-none').addEventListener('click', () => {
     // At least one season has to stay selected; keep the most recent.
@@ -770,6 +828,8 @@ function initSettings() {
 let currentView = null;
 
 function showView(name) {
+  if (currentView === 'unlimited' && name !== 'unlimited') u.card?.pause();
+  if (currentView && currentView !== 'unlimited' && name === 'unlimited') u.card?.resume();
   currentView = name;
   settings.view = name;
   saveSettings();

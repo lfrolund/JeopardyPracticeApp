@@ -14,6 +14,8 @@ A static web app for practicing Jeopardy!, built to run on GitHub Pages with no 
 
 For every clue you can type a response (optional), reveal the correct one, and mark yourself right, wrong, or skip. The app suggests whether your typed response matches, but you make the call. Keyboard: Enter reveals, then R, W or S.
 
+**Timer.** Each clue has a countdown ring that empties clockwise. It's on by default at 15 seconds, the length of the Jeopardy! audition test, and you can change the length or turn it off in Settings. When time runs out, the response is revealed for you to grade. In three-player games, the clock pauses while someone answers and starts over for the others after a miss.
+
 **Seasons.** Settings lets you limit clues to any set of seasons. All seasons are used by default. Clue values from before November 26, 2001, when the show doubled its values, are shown at today's values.
 
 ## Where the clues come from
