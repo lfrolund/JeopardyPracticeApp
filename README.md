@@ -39,3 +39,5 @@ node scripts/build-index.mjs   # rebuild data/index.json against the dataset's l
 ## Deploying
 
 In the repository's **Settings → Pages**, set **Source** to **Deploy from a branch** and choose `main`, `/ (root)`. There's no build step; `.nojekyll` tells Pages to serve the files as they are. The **Tests** workflow runs `npm test` on pushes and pull requests.
+
+Pages tells browsers to cache files for ten minutes, so `index.html` loads the stylesheet and scripts with a `?v=` version, and the modules import each other with the same one. When you change any of them, bump that version everywhere (a test checks they match); otherwise returning visitors can get a mix of old and new files.
