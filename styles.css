@@ -145,7 +145,7 @@ fieldset.inline label { flex-direction: row; align-items: center; color: var(--t
   padding: 20px;
   box-shadow: 0 6px 24px rgb(0 0 0 / 0.18);
 }
-.clue-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; }
+.clue-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
 .clue-meta .cat { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
 .clue-meta .val { color: var(--gold); font-weight: 700; font-size: 1.15rem; }
 .clue-meta .muted { color: #b9c2ff; font-size: 0.85rem; }
@@ -317,3 +317,24 @@ th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--bord
 .cell .who { display: block; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .standings { margin: 8px 0; padding-left: 1.4em; }
 .standings li { margin: 2px 0; }
+
+.indent-inline { margin-left: 16px; }
+.seconds { width: 5em; }
+
+.timer { position: relative; width: 52px; height: 52px; margin-left: auto; flex: none; }
+.timer svg { display: block; }
+.timer-track { stroke: rgb(255 255 255 / 0.18); }
+.timer-arc { stroke: var(--gold); stroke-linecap: butt; }
+.timer.low .timer-arc { stroke: #ff7a66; }
+.timer.stopped .timer-arc { stroke: rgb(255 255 255 / 0.45); }
+.timer-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+}
+.timer.low .timer-label { color: #ffb3a8; }
