@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jeopardy! Practice</title>
   <meta name="description" content="Practice Jeopardy! or the California DMV written test with unlimited clues or a full scored board.">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
   <header class="topbar">
@@ -163,6 +163,22 @@
     <div class="modal-card" role="dialog" aria-modal="true"></div>
   </div>
 
-  <script type="module" src="js/app.js"></script>
+  <!-- GitHub Pages lets browsers cache each file for 10 minutes, so right after a deploy a
+       browser can mix a new app.js with an old sources.js and fail to start. Every script
+       gets the same version here; bump it whenever a deploy changes the JavaScript. -->
+  <script type="importmap">
+    {
+      "imports": {
+        "./js/app.js": "./js/app.js?v=2",
+        "./js/dd.js": "./js/dd.js?v=2",
+        "./js/grade.js": "./js/grade.js?v=2",
+        "./js/sources.js": "./js/sources.js?v=2",
+        "./js/timer.js": "./js/timer.js?v=2",
+        "./js/tsv.js": "./js/tsv.js?v=2",
+        "./js/util.js": "./js/util.js?v=2"
+      }
+    }
+  </script>
+  <script type="module">import './js/app.js';</script>
 </body>
 </html>
