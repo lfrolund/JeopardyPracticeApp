@@ -1,10 +1,12 @@
-// Clue sources. Both expose the same interface:
+// Clue sources. All expose the same interface:
 //   seasons()                      -> [{ id, label }]
 //   randomClues(n, { seasons, rounds }) -> [clue]
 //   randomCategory({ seasons, rounds }) -> [clue] (one category from one game, by value)
 //   board(round, { seasons })      -> [{ name, airDate, clues: [clue x5] }] x6
 //   ddStats                        -> Daily Double odds to use, or null for the defaults
 // A clue is { round, value, dd, category, clue, response, airDate, season, comments }.
+// Multiple-choice clues (the DMV source) also carry choices, answer (an index into
+// choices), explanation, and sign ({ name, svg } or null).
 import { F, headerIndex, rowToClue } from './tsv.js';
 import { modernValue, normalizeRound, parseValue, pick, rowForValue, seasonFromDate, shuffle, weightedIndex } from './util.js';
 
@@ -304,5 +306,90 @@ export class CluebaseSource {
     }
     if (cats.length < 6) throw new Error('Cluebase did not return enough complete categories for a board.');
     return cats;
+  }
+}
+
+// ---------------------------------------------------------------- California DMV
+
+// Multiple-choice questions for the California DMV written (knowledge) test, from
+// github.com/Vishakadatta/ca-dmv-prep (MIT License). scripts/build-dmv.mjs converts them
+// into data/dmv.json, which is small enough (about 80 KB) to load whole.
+// Topics stand in for categories. There are no seasons, rounds or dollar values; a board
+// gives each row its usual value so the scoring still works.
+export class DMVSource {
+  constructor({ url = 'data/dmv.json', fetchFn = (...a) => fetch(...a), rng = Math.random } = {}) {
+    this.url = url;
+    this.fetchFn = fetchFn;
+    this.rng = rng;
+    this.loaded = null;
+    this.deck = [];
+    this.ddStats = null;
+    this.label = 'California DMV written test';
+  }
+
+  data() {
+    this.loaded ||= (async () => {
+      let res;
+      try {
+        res = await this.fetchFn(this.url);
+      } catch {
+        throw new Error('Couldn’t load the DMV questions. Check your connection and try again.');
+      }
+      if (!res.ok) throw new Error(`Couldn't load the DMV questions (${res.status}).`);
+      const data = await res.json();
+      this.topicNames = new Map(data.topics.map((t) => [t.key, t.name]));
+      this.questions = data.questions;
+      this.signs = data.signs;
+      return data;
+    })();
+    this.loaded.catch(() => { this.loaded = null; });
+    return this.loaded;
+  }
+
+  async seasons() {
+    return [];
+  }
+
+  // A question as a clue, with its choices shuffled. response is the correct choice's text.
+  toClue(q, value = 0) {
+    const order = shuffle(q.choices.map((_, i) => i), this.rng);
+    const choices = order.map((i) => q.choices[i]);
+    const answer = order.indexOf(q.answer);
+    return {
+      round: null, value, dd: false, category: this.topicNames.get(q.topic) || q.topic,
+      clue: q.question, response: choices[answer], choices, answer, explanation: q.explanation,
+      sign: q.sign ? this.signs[q.sign] : null, airDate: '', comments: '',
+    };
+  }
+
+  // Draws from a shuffled deck, so no question repeats until the whole bank has been seen.
+  async randomClues(n) {
+    await this.data();
+    const out = [];
+    while (out.length < n) {
+      if (!this.deck.length) this.deck = shuffle(this.questions, this.rng);
+      out.push(this.toClue(this.deck.pop()));
+    }
+    return out;
+  }
+
+  topicQuestions(key, n) {
+    return shuffle(this.questions.filter((q) => q.topic === key), this.rng).slice(0, n);
+  }
+
+  async randomCategory() {
+    await this.data();
+    return this.topicQuestions(pick([...this.topicNames.keys()], this.rng), 5).map((q) => this.toClue(q));
+  }
+
+  async board(round) {
+    await this.data();
+    const topics = shuffle([...this.topicNames.keys()].filter((k) => this.questions.filter((q) => q.topic === k).length >= 5), this.rng);
+    if (topics.length < 6) throw new Error('Not enough DMV topics for a board.');
+    return topics.slice(0, 6).map((key) => ({
+      name: this.topicNames.get(key),
+      airDate: '',
+      clues: this.topicQuestions(key, 5).map((q, row) => this.toClue(q, roundValue(row, round))),
+    }));
   }
 }

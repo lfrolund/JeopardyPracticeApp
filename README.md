@@ -16,6 +16,8 @@ For every clue you can type a response (optional), reveal the correct one, and m
 
 **Timer.** Each clue has a countdown ring that empties clockwise. It's on by default at 15 seconds, the length of the Jeopardy! audition test, and you can change the length or turn it off in Settings. When time runs out, the response is revealed for you to grade. In three-player games, the clock pauses while someone answers and starts over for the others after a miss.
 
+**California DMV written test.** Settings → Question source can switch the whole app to 164 multiple-choice practice questions for the California driver's license knowledge test. Unlimited mode, practice boards (with topics as categories) and three-player games all work the same way. Pick a choice with the mouse or keys 1 to 4, and the app marks it, shows the right answer and explains why. Running out of time counts as a miss. Questions about road signs show the sign. Rounds, seasons and dollar scores in Unlimited are hidden in this mode, and the DMV tally is kept separately from your Jeopardy! one.
+
 **Seasons.** Settings lets you limit clues to any set of seasons. All seasons are used by default. Clue values from before November 26, 2001, when the show doubled its values, are shown at today's values.
 
 ## Where the clues come from
@@ -26,6 +28,8 @@ The index holds offsets, counts and Daily Double statistics, and no clue text. `
 
 The dataset's author asks that it not be used in public-facing products. This repository doesn't copy or host any clues, but the deployed site is public. Keep that in mind before sharing the link.
 
+The DMV questions come from [ca-dmv-prep](https://github.com/Vishakadatta/ca-dmv-prep) by Vishaka Datta J, under the MIT License. Its author wrote them from the [California Driver Handbook](https://www.dmv.ca.gov/portal/handbook/california-driver-handbook/); they aren't the DMV's own test questions. `scripts/build-dmv.mjs` converts them, with the road-sign drawings they use, into `data/dmv.json` (about 80 KB) at a pinned commit, and that file keeps the source's copyright notice.
+
 A **Cluebase API** option remains in Settings for anyone running their own [Cluebase](https://github.com/lukelavin/cluebase). The public instance at `cluebase.lukelav.in` no longer resolves as of October 2026.
 
 ## Running locally
@@ -34,6 +38,7 @@ A **Cluebase API** option remains in Settings for anyone running their own [Clue
 npm start      # serves the app at http://localhost:8000
 npm test       # unit tests (Node 20+)
 node scripts/build-index.mjs   # rebuild data/index.json against the dataset's latest commit
+node scripts/build-dmv.mjs     # rebuild data/dmv.json from the pinned ca-dmv-prep commit
 ```
 
 ## Deploying

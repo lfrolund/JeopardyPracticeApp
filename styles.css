@@ -170,6 +170,32 @@ fieldset.inline label { flex-direction: row; align-items: center; color: var(--t
 .clue-card .ghost { color: #fff; border-color: rgb(255 255 255 / 0.4); }
 .clue-card .muted { color: #b9c2ff; }
 
+/* Multiple-choice questions (DMV) */
+.clue-card.mc .clue-text { text-transform: none; font-size: clamp(1.15rem, 2.6vw, 1.5rem); margin: 14px 0; }
+.sign { display: block; width: 96px; height: 96px; margin: 14px 0 0; }
+.choices { display: grid; gap: 8px; }
+.choice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  text-align: left;
+  width: 100%;
+  background: rgb(255 255 255 / 0.08);
+  border-color: rgb(255 255 255 / 0.35);
+  color: #fff;
+  line-height: 1.35;
+}
+.choice:hover:not(:disabled) { background: rgb(255 255 255 / 0.18); }
+.choice:disabled { opacity: 0.6; cursor: default; }
+.choice.correct { background: var(--good); border-color: var(--good); opacity: 1; }
+.choice.picked-wrong { background: var(--bad); border-color: var(--bad); opacity: 1; }
+.letter { font-weight: 800; color: var(--gold); min-width: 1.2em; }
+.choice.correct .letter, .choice.picked-wrong .letter { color: #fff; }
+.choice-list { list-style: none; padding: 0; margin: 0 0 14px; display: grid; gap: 6px; }
+.choice-list li { display: flex; gap: 10px; }
+.explanation { line-height: 1.5; margin: 0 0 12px; }
+.explanation b { color: var(--gold); }
+
 .board {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
