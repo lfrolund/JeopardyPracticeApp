@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jeopardy! Practice</title>
-  <meta name="description" content="Practice Jeopardy! with unlimited clues or a full scored board.">
+  <meta name="description" content="Practice Jeopardy! or the California DMV written test with unlimited clues or a full scored board.">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -35,7 +35,7 @@
             <option value="value">Lowest value first</option>
           </select>
         </label>
-        <fieldset class="inline">
+        <fieldset id="u-rounds" class="inline">
           <legend>Rounds</legend>
           <label><input type="checkbox" class="u-round" value="1"> Jeopardy!</label>
           <label><input type="checkbox" class="u-round" value="2"> Double</label>
@@ -45,7 +45,7 @@
       </div>
 
       <div class="scorebar">
-        <div><span class="label">Score</span><strong id="u-score">$0</strong></div>
+        <div id="u-score-cell"><span class="label">Score</span><strong id="u-score">$0</strong></div>
         <div><span class="label">Right</span><strong id="u-right">0</strong></div>
         <div><span class="label">Wrong</span><strong id="u-wrong">0</strong></div>
         <div><span class="label">Accuracy</span><strong id="u-acc">–</strong></div>
@@ -64,7 +64,7 @@
             <option value="2">Double Jeopardy! ($400 to $2,000)</option>
           </select>
         </label>
-        <label>Board
+        <label id="b-style-wrap">Board
           <select id="b-style">
             <option value="episode">Real episode</option>
             <option value="mixed">Mixed from 10 episodes</option>
@@ -107,12 +107,20 @@
     <!-- Settings -------------------------------------------------------- -->
     <section id="view-settings" class="view" hidden>
       <div class="panel">
-        <h2>Clue source</h2>
+        <h2>Question source</h2>
         <label class="radio"><input type="radio" name="source" value="dataset"> Jeopardy! clue dataset (recommended)</label>
         <div class="indent">
           <p class="muted">Clues come from the
             <a href="https://github.com/jwolle1/jeopardy_clue_dataset" target="_blank" rel="noopener">Jeopardy! clue dataset</a>
             on GitHub. The app fetches only the episodes it needs, about 8 KB each, straight from GitHub.</p>
+        </div>
+
+        <label class="radio"><input type="radio" name="source" value="dmv"> California DMV written test</label>
+        <div class="indent">
+          <p class="muted">164 multiple-choice practice questions in 11 topics, written from the
+            <a href="https://www.dmv.ca.gov/portal/handbook/california-driver-handbook/" target="_blank" rel="noopener">California Driver Handbook</a>
+            by the <a href="https://github.com/Vishakadatta/ca-dmv-prep" target="_blank" rel="noopener">ca-dmv-prep</a> project (MIT License).
+            They're practice questions, not the DMV's own test. Topics take the place of categories.</p>
         </div>
 
         <label class="radio"><input type="radio" name="source" value="cluebase"> Cluebase API</label>
@@ -125,7 +133,7 @@
         </div>
       </div>
 
-      <div class="panel">
+      <div id="s-seasons-panel" class="panel">
         <h2>Seasons</h2>
         <p class="muted">Leave all selected to draw from every season.</p>
         <div class="row">

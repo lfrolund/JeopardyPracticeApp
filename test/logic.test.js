@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { DEFAULT_DD_STATS, maxWager, placeDailyDoubles } from '../js/dd.js';
 import { isLikelyCorrect, normalizeAnswer } from '../js/grade.js';
-import { completeCategory, EpisodeSource } from '../js/sources.js';
+import { completeCategory, DMVSource, EpisodeSource } from '../js/sources.js';
 import { headerIndex, rowToClue } from '../js/tsv.js';
 import { modernValue, normalizeRound, rowForValue, seasonFromDate } from '../js/util.js';
 
@@ -152,4 +153,37 @@ test('completeCategory fills a Daily Double stored at its wager', () => {
   const out = completeCategory([mk(200), mk(400), mk(3000, true), mk(800), mk(1000)], 1);
   assert.deepEqual(out.map((c) => c.value), [200, 400, 600, 800, 1000]);
   assert.equal(completeCategory([mk(200), mk(400)], 1), null);
+});
+
+const dmvData = JSON.parse(await readFile(new URL('../data/dmv.json', import.meta.url), 'utf8'));
+const dmvSource = (seed) => new DMVSource({ fetchFn: async () => ({ ok: true, json: async () => dmvData }), rng: seeded(seed) });
+
+test('DMV questions keep the right answer when choices are shuffled', async () => {
+  const src = dmvSource(3);
+  const clues = await src.randomClues(dmvData.questions.length);
+  for (const c of clues) {
+    const q = dmvData.questions.find((x) => x.question === c.clue && x.choices.every((ch) => c.choices.includes(ch)));
+    assert.equal(c.response, q.choices[q.answer]);
+    assert.equal(c.choices[c.answer], c.response);
+    assert.equal(c.choices.length, q.choices.length);
+  }
+  // One pass through the deck covers every question once.
+  assert.equal(new Set(clues.map((c) => c.response)).size, new Set(dmvData.questions.map((q) => q.choices[q.answer])).size);
+});
+
+test('DMV boards have six topics of five valued questions', async () => {
+  const cats = await dmvSource(5).board(2);
+  assert.equal(cats.length, 6);
+  assert.equal(new Set(cats.map((c) => c.name)).size, 6);
+  for (const cat of cats) {
+    assert.deepEqual(cat.clues.map((c) => c.value), [400, 800, 1200, 1600, 2000]);
+    assert.ok(cat.clues.every((c) => c.category === cat.name));
+  }
+  const topic = await dmvSource(9).randomCategory();
+  assert.equal(topic.length, 5);
+  assert.equal(new Set(topic.map((c) => c.category)).size, 1);
+});
+
+test('DMV signs referenced by questions are bundled', () => {
+  for (const q of dmvData.questions) if (q.sign) assert.ok(dmvData.signs[q.sign]?.svg.startsWith('<svg'));
 });

@@ -1,7 +1,7 @@
 import { DEFAULT_DD_STATS, maxWager, placeDailyDoubles, rowPercentages } from './dd.js';
 import { isLikelyCorrect } from './grade.js';
 import { countdown } from './timer.js';
-import { CluebaseSource, DEFAULT_CLUEBASE_URL, EpisodeSource } from './sources.js';
+import { CluebaseSource, DEFAULT_CLUEBASE_URL, DMVSource, EpisodeSource } from './sources.js';
 import { ROUND_NAMES, formatMoney, shuffle } from './util.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -66,12 +66,26 @@ function safeLocalStorage() {
   try { return window.localStorage; } catch { return null; }
 }
 
+const isDMV = () => settings.source === 'dmv';
+
 function buildSource() {
-  source = settings.source === 'cluebase'
-    ? new CluebaseSource(settings.cluebaseUrl, safeLocalStorage())
-    : new EpisodeSource();
+  if (settings.source === 'cluebase') source = new CluebaseSource(settings.cluebaseUrl, safeLocalStorage());
+  else if (isDMV()) source = new DMVSource();
+  else source = new EpisodeSource();
   seasonList = [];
   return source;
+}
+
+// The DMV bank has no seasons, rounds or dollar values, so the controls for those are hidden.
+function applySourceControls() {
+  const dmv = isDMV();
+  $('#u-rounds').hidden = dmv;
+  $('#u-order-wrap').hidden = dmv || settings.unlimited.mode !== 'categories';
+  $('#u-score-cell').hidden = dmv;
+  $('#u-mode option[value=clues]').textContent = dmv ? 'Random questions' : 'Truly random clues';
+  $('#u-mode option[value=categories]').textContent = dmv ? 'Random topics' : 'Random categories';
+  $('#b-style-wrap').hidden = dmv;
+  $('#s-seasons-panel').hidden = dmv;
 }
 
 const ddStats = () => source?.ddStats || DEFAULT_DD_STATS;
@@ -92,6 +106,7 @@ function friendlyError(err) {
 // ------------------------------------------------------------------ seasons
 
 function seasonSummary() {
+  if (isDMV()) return 'California DMV written test';
   const sel = settings.seasons;
   if (!sel.length) return 'All seasons';
   const s = [...sel].sort((a, b) => a - b);
@@ -163,18 +178,13 @@ function clueTimer(onExpire) {
 function clueCard({ clue, value, valueLabel, footer }, onResult) {
   let revealed = false;
   let timedOut = false;
+  if (clue.choices) return choiceCard({ clue, value, valueLabel, footer }, onResult);
   const timer = clueTimer(() => { timedOut = true; reveal(); });
   const input = el('input', { type: 'text', class: 'answer', placeholder: 'Your response (optional)', autocomplete: 'off', spellcheck: 'false' });
   const revealBtn = el('button', { class: 'primary', onclick: reveal }, 'Reveal');
   const after = el('div', { class: 'after', hidden: true });
 
-  const meta = el('div', { class: 'clue-meta' },
-    el('span', { class: 'cat' }, clue.category),
-    el('span', { class: 'val' }, valueLabel ?? (value ? formatMoney(value) : ROUND_NAMES[clue.round])),
-    clue.dd ? el('span', { class: 'tag' }, 'Daily Double') : null,
-    el('span', { class: 'muted' }, [ROUND_NAMES[clue.round], clue.airDate].filter(Boolean).join(' · ')),
-    timer?.el,
-  );
+  const meta = clueMeta({ clue, value, valueLabel }, timer);
 
   const card = el('div', { class: 'clue-card' },
     meta,
@@ -233,9 +243,104 @@ function clueCard({ clue, value, valueLabel, footer }, onResult) {
   return card;
 }
 
+function clueMeta({ clue, value, valueLabel }, timer) {
+  return el('div', { class: 'clue-meta' },
+    el('span', { class: 'cat' }, clue.category),
+    el('span', { class: 'val' }, valueLabel ?? (value ? formatMoney(value) : ROUND_NAMES[clue.round])),
+    clue.dd ? el('span', { class: 'tag' }, 'Daily Double') : null,
+    el('span', { class: 'muted' }, [ROUND_NAMES[clue.round], clue.airDate].filter(Boolean).join(' · ')),
+    timer?.el,
+  );
+}
+
+const LETTERS = 'ABCDEFGH';
+
+function signImage(sign) {
+  return sign ? el('img', {
+    class: 'sign', alt: `${sign.name} sign`,
+    src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(sign.svg)}`,
+  }) : null;
+}
+
+// Explanations may contain <b> and <i>, which become elements; everything else is text.
+function richText(text) {
+  const out = [];
+  const re = /<(b|i)>(.*?)<\/\1>/gi;
+  let last = 0;
+  for (let m; (m = re.exec(text));) {
+    out.push(text.slice(last, m.index), el(m[1].toLowerCase(), {}, m[2]));
+    last = re.lastIndex;
+  }
+  out.push(text.slice(last));
+  return out.filter((x) => x !== '');
+}
+
+// Multiple-choice clues: picking a choice reveals the answer and grades it. Running out of
+// time counts as a miss, as on the DMV test. Keys 1 to 4 (or A to D) pick a choice.
+function choiceCard({ clue, value, valueLabel, footer }, onResult) {
+  let revealed = false;
+  const timer = clueTimer(() => choose(null));
+  const buttons = clue.choices.map((text, i) => el('button', { class: 'choice', onclick: () => choose(i) },
+    el('span', { class: 'letter' }, LETTERS[i]), text));
+  const after = el('div', { class: 'after', hidden: true });
+  const card = el('div', { class: 'clue-card mc' },
+    clueMeta({ clue, value, valueLabel }, timer),
+    signImage(clue.sign),
+    el('p', { class: 'clue-text' }, clue.clue),
+    el('div', { class: 'choices' }, buttons),
+    after,
+    footer || null,
+  );
+
+  function choose(i) {
+    if (revealed) return;
+    revealed = true;
+    timer?.stop();
+    const right = i === clue.answer;
+    buttons.forEach((btn, j) => {
+      btn.disabled = true;
+      if (j === clue.answer) btn.classList.add('correct');
+      else if (j === i) btn.classList.add('picked-wrong');
+    });
+    const amount = value ? ` (${right ? '+' : '−'}${formatMoney(value)})` : '';
+    const next = el('button', { class: 'primary', onclick: () => finish(right ? 'right' : 'wrong') }, 'Next');
+    after.replaceChildren(...[
+      el('p', { class: right ? 'hint good' : 'hint bad' },
+        i == null ? `Time’s up! Counted as wrong${amount}.` : right ? `Correct${amount}.` : `Not quite${amount}. The answer is ${LETTERS[clue.answer]}.`),
+      clue.explanation ? el('p', { class: 'explanation' }, richText(clue.explanation)) : null,
+      el('div', { class: 'grade-row' }, next),
+    ].filter(Boolean));
+    after.hidden = false;
+    next.focus();
+  }
+
+  function finish(result) {
+    timer?.stop();
+    document.removeEventListener('keydown', onKey);
+    onResult(result);
+  }
+
+  function onKey(e) {
+    if (!card.isConnected) return document.removeEventListener('keydown', onKey);
+    if (revealed || e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toUpperCase();
+    const i = /^[1-9]$/.test(k) ? Number(k) - 1 : LETTERS.indexOf(k);
+    if (k.length === 1 && i >= 0 && i < buttons.length) choose(i);
+  }
+  document.addEventListener('keydown', onKey);
+
+  card.focusInput = () => {};
+  card.pause = () => { if (!revealed) timer?.stop(); };
+  card.resume = () => { if (!revealed) timer?.restart(); };
+  return card;
+}
+
 // ------------------------------------------------------------------ unlimited
 
-const u = { ...store.get('unlimited-score', { score: 0, right: 0, wrong: 0 }), queue: [], loading: null, gen: 0 };
+// The DMV bank keeps its own tally so it doesn't mix with Jeopardy! accuracy.
+const scoreKey = () => (isDMV() ? 'unlimited-score-dmv' : 'unlimited-score');
+const loadUnlimitedScore = () => store.get(scoreKey(), { score: 0, right: 0, wrong: 0 });
+const u = { ...loadUnlimitedScore(), queue: [], loading: null, gen: 0 };
 
 function renderUnlimitedScore() {
   $('#u-score').textContent = formatMoney(u.score);
@@ -244,7 +349,7 @@ function renderUnlimitedScore() {
   $('#u-wrong').textContent = u.wrong;
   const n = u.right + u.wrong;
   $('#u-acc').textContent = n ? `${Math.round((u.right / n) * 100)}%` : '–';
-  store.set('unlimited-score', { score: u.score, right: u.right, wrong: u.wrong });
+  store.set(scoreKey(), { score: u.score, right: u.right, wrong: u.wrong });
 }
 
 function resetUnlimitedQueue() {
@@ -260,7 +365,8 @@ async function refill() {
   if (settings.unlimited.mode === 'categories') {
     const cat = await source.randomCategory(opts);
     const ordered = settings.unlimited.order === 'random' ? shuffle(cat) : cat;
-    return ordered.map((c, i) => ({ clue: c, pos: `Clue ${i + 1} of ${ordered.length} in this category` }));
+    const noun = isDMV() ? ['Question', 'topic'] : ['Clue', 'category'];
+    return ordered.map((c, i) => ({ clue: c, pos: `${noun[0]} ${i + 1} of ${ordered.length} in this ${noun[1]}` }));
   }
   return (await source.randomClues(10, opts)).map((c) => ({ clue: c }));
 }
@@ -326,7 +432,7 @@ function initUnlimitedControls() {
   $('#u-order-wrap').hidden = mode.value !== 'categories';
   mode.addEventListener('change', () => {
     settings.unlimited.mode = mode.value;
-    $('#u-order-wrap').hidden = mode.value !== 'categories';
+    $('#u-order-wrap').hidden = isDMV() || mode.value !== 'categories';
     saveSettings();
     resetUnlimitedQueue();
   });
@@ -376,6 +482,7 @@ async function newBoard() {
         ? settings.board.names.map((name) => ({ name, score: 0, coryat: 0, right: 0, wrong: 0 }))
         : null,
       control: 0,
+      source: isDMV() ? 'dmv' : 'jeopardy',
       seasons: settings.seasons.slice(),
       startedAt: new Date().toISOString(),
       finished: false,
@@ -544,7 +651,7 @@ function openCellMulti(row, col) {
       if (answering == null) { showResponse = true; draw(true); } else draw();
     });
     const body = el('div');
-    const card = el('div', { class: 'clue-card' },
+    const card = el('div', { class: `clue-card${clue.choices ? ' mc' : ''}` },
       el('div', { class: 'clue-meta' },
         el('span', { class: 'cat' }, clue.category),
         el('span', { class: 'val' }, isDD ? `${players[only].name} wagered ${formatMoney(value)}` : formatMoney(value)),
@@ -552,7 +659,9 @@ function openCellMulti(row, col) {
         el('span', { class: 'muted' }, [ROUND_NAMES[clue.round], clue.airDate].filter(Boolean).join(' · ')),
         timer?.el),
       clue.comments ? el('p', { class: 'comments' }, clue.comments) : null,
+      signImage(clue.sign),
       el('p', { class: 'clue-text' }, clue.clue),
+      clue.choices ? el('ol', { class: 'choice-list' }, clue.choices.map((c, i) => el('li', {}, el('span', { class: 'letter' }, LETTERS[i]), c))) : null,
       body);
 
     const finish = (result, by) => {
@@ -599,7 +708,10 @@ function openCellMulti(row, col) {
         parts.push(el('ul', { class: 'attempts' }, attempts.map((a) => el('li', {},
           `${players[a.by].name}: ${a.result} (${a.result === 'right' ? '+' : '−'}${formatMoney(value)})`))));
       }
-      if (showResponse) parts.push(el('p', { class: 'response' }, clue.response));
+      if (showResponse) {
+        parts.push(el('p', { class: 'response' }, clue.choices ? `${LETTERS[clue.answer]}. ${clue.response}` : clue.response));
+        if (clue.explanation) parts.push(el('p', { class: 'explanation' }, richText(clue.explanation)));
+      }
       if (closed) {
         parts.push(el('div', { class: 'grade-row' },
           el('button', { class: 'primary', onclick: () => finish(attempts.length ? 'wrong' : 'skip', null) }, 'Back to board')));
@@ -652,7 +764,7 @@ function finishBoard() {
   b.finished = true;
   const history = store.get('board-history', []);
   history.unshift({
-    at: new Date().toISOString(), round: b.round, score: b.score, coryat: b.coryat,
+    at: new Date().toISOString(), source: b.source, round: b.round, score: b.score, coryat: b.coryat,
     right: b.right, wrong: b.wrong, answered: Object.keys(b.done).length, seasons: b.seasons,
     players: b.players?.map(({ name, score, coryat, right, wrong }) => ({ name, score, coryat, right, wrong })),
   });
@@ -668,7 +780,7 @@ function renderSummary() {
       el('h2', {}, ranked[0].score > (ranked[1]?.score ?? -Infinity) ? `${ranked[0].name} leads with ${formatMoney(ranked[0].score)}` : 'It’s a tie at the top'),
       el('ol', { class: 'standings' }, ranked.map((p) => el('li', {},
         `${p.name}: ${formatMoney(p.score)} (${p.right} right, ${p.wrong} wrong, Coryat ${formatMoney(p.coryat)})`))),
-      el('p', { class: 'muted' }, `${ROUND_NAMES[b.round]} round.`),
+      el('p', { class: 'muted' }, b.source === 'dmv' ? 'DMV board.' : `${ROUND_NAMES[b.round]} round.`),
       el('button', { class: 'primary', onclick: newBoard }, 'Play another board')));
     return;
   }
@@ -676,7 +788,7 @@ function renderSummary() {
   const ddResults = Object.values(b.done).filter((d) => d.dd);
   $('#b-summary').replaceChildren(el('div', { class: 'summary' },
     el('h2', {}, `Final score: ${formatMoney(b.score)}`),
-    el('p', {}, `${ROUND_NAMES[b.round]} round. ${b.right} right, ${b.wrong} wrong, ${Object.keys(b.done).length - answered} skipped. ` +
+    el('p', {}, `${b.source === 'dmv' ? 'DMV board' : `${ROUND_NAMES[b.round]} round`}. ${b.right} right, ${b.wrong} wrong, ${Object.keys(b.done).length - answered} skipped. ` +
       `Coryat score ${formatMoney(b.coryat)}.`),
     ddResults.length ? el('p', { class: 'muted' }, `Daily Doubles: ${ddResults.map((d) => `${d.result} for ${formatMoney(d.value)}`).join(', ')}.`) : null,
     el('button', { class: 'primary', onclick: newBoard }, 'Play another board')));
@@ -690,7 +802,7 @@ function renderHistory() {
     return;
   }
   const avg = (r) => {
-    const h = history.filter((x) => x.round === r && !x.players);
+    const h = history.filter((x) => x.round === r && !x.players && x.source !== 'dmv');
     return h.length ? `${formatMoney(Math.round(h.reduce((s, x) => s + x.coryat, 0) / h.length))} average Coryat over ${h.length}` : null;
   };
   box.replaceChildren(
@@ -699,7 +811,7 @@ function renderHistory() {
       el('thead', {}, el('tr', {}, el('th', {}, 'Date'), el('th', {}, 'Round'), el('th', {}, 'Score'), el('th', {}, 'Coryat'), el('th', {}, 'Right'), el('th', {}, 'Wrong'))),
       el('tbody', {}, history.map((h) => el('tr', {},
         el('td', {}, new Date(h.at).toLocaleDateString()),
-        el('td', {}, h.round === 2 ? 'Double' : 'Jeopardy!'),
+        el('td', {}, h.source === 'dmv' ? 'DMV' : h.round === 2 ? 'Double' : 'Jeopardy!'),
         h.players
           ? el('td', { colspan: 4 }, h.players.map((p) => `${p.name} ${formatMoney(p.score)}`).join(' · '))
           : [el('td', {}, formatMoney(h.score)), el('td', {}, formatMoney(h.coryat)), el('td', {}, h.right), el('td', {}, h.wrong)])))),
@@ -762,6 +874,9 @@ function renderDDOdds() {
 
 async function switchSource() {
   buildSource();
+  applySourceControls();
+  Object.assign(u, loadUnlimitedScore());
+  renderUnlimitedScore();
   renderDDOdds();
   refreshSeasonSummaries();
   showBanner('');
@@ -841,11 +956,12 @@ function showView(name) {
 
 async function init() {
   // 'local' was the earlier file-import source; the GitHub dataset replaces it.
-  if (settings.source !== 'cluebase') settings.source = 'dataset';
+  if (settings.source !== 'cluebase' && settings.source !== 'dmv') settings.source = 'dataset';
   buildSource();
   initUnlimitedControls();
   initBoardControls();
   initSettings();
+  applySourceControls();
   renderDDOdds();
   renderUnlimitedScore();
   renderHistory();
