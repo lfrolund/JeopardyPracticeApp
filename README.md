@@ -43,4 +43,4 @@ node scripts/build-dmv.mjs     # rebuild data/dmv.json from the pinned ca-dmv-pr
 
 ## Deploying
 
-In the repository's **Settings → Pages**, set **Source** to **Deploy from a branch** and choose `main`, `/ (root)`. There's no build step; `.nojekyll` tells Pages to serve the files as they are. The **Tests** workflow runs `npm test` on pushes and pull requests.
+In the repository's **Settings → Pages**, set **Source** to **Deploy from a branch** and choose `main`, `/ (root)`. There's no build step; `.nojekyll` tells Pages to serve the files as they are. Pages lets browsers cache files for 10 minutes, so `index.html` loads every script and the stylesheet with a `?v=` version through an import map; bump that number whenever a change touches the JavaScript or CSS, so a browser never mixes old and new files. The **Tests** workflow runs `npm test` on pushes and pull requests.

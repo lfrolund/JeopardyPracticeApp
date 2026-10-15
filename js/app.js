@@ -459,8 +459,11 @@ function initUnlimitedControls() {
 
 // ------------------------------------------------------------------ practice board
 
-let b = store.get('board-state', null);
-const saveBoard = () => store.set('board-state', b);
+// Each source keeps its own board, so switching to the DMV questions doesn't leave a
+// Jeopardy! board on screen (or the other way round), and switching back resumes it.
+const boardKey = () => (isDMV() ? 'board-state-dmv' : 'board-state');
+let b = store.get(boardKey(), null);
+const saveBoard = () => store.set(boardKey(), b);
 
 async function newBoard() {
   const round = Number($('#b-round').value);
@@ -469,8 +472,11 @@ async function newBoard() {
   const boardEl = $('#b-board');
   $('#b-summary').replaceChildren();
   boardEl.replaceChildren(el('p', { class: 'loading' }, 'Building a board…'));
+  // A board that finishes loading after the source has changed belongs to the old source.
+  const from = source;
   try {
-    const cats = await source.board(round, { seasons: settings.seasons, style: settings.board.style });
+    const cats = await from.board(round, { seasons: settings.seasons, style: settings.board.style });
+    if (from !== source) return;
     b = {
       round,
       cats,
@@ -491,6 +497,7 @@ async function newBoard() {
     showBanner('');
     renderBoard();
   } catch (err) {
+    if (from !== source) return;
     boardEl.replaceChildren(el('div', { class: 'error' }, el('p', {}, friendlyError(err))));
     showBanner(friendlyError(err));
   }
@@ -877,6 +884,8 @@ async function switchSource() {
   applySourceControls();
   Object.assign(u, loadUnlimitedScore());
   renderUnlimitedScore();
+  b = store.get(boardKey(), null);
+  $('#b-summary').replaceChildren();
   renderDDOdds();
   refreshSeasonSummaries();
   showBanner('');
@@ -951,7 +960,11 @@ function showView(name) {
   for (const v of $$('.view')) v.hidden = v.id !== `view-${name}`;
   for (const t of $$('.tab')) t.setAttribute('aria-selected', String(t.dataset.view === name));
   if (name === 'unlimited' && !$('#u-stage').children.length) nextUnlimited();
-  if (name === 'board') renderBoard();
+  if (name === 'board') {
+    // With no board yet for this source, deal one rather than show an empty grid.
+    if (!b) newBoard();
+    else renderBoard();
+  }
 }
 
 async function init() {
